@@ -1,1 +1,1 @@
-# bite
+# bite (QR tableside Ordering app)
