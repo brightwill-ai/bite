@@ -1,0 +1,21 @@
+{
+  "name": "bite",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "typecheck": "turbo typecheck",
+    "dev:web": "turbo dev --filter=@bite/web",
+    "dev:menu": "turbo dev --filter=@bite/menu",
+    "dev:admin": "turbo dev --filter=@bite/admin"
+  },
+  "packageManager": "npm@11.4.2",
+  "devDependencies": {
+    "turbo": "^2.3.0"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "@bite/config",
+  "version": "0.0.0",
+  "private": true,
+  "main": "./tailwind.config.js",
+  "exports": {
+    "./tailwind": "./tailwind.config.js"
+  }
+}

@@ -1,0 +1,94 @@
+'use client'
+
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { useAuthStore } from '@/store/auth'
+
+export default function LoginPage() {
+  const router = useRouter()
+  const login = useAuthStore((s) => s.login)
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError('')
+    setLoading(true)
+
+    // Small delay for UX
+    await new Promise((r) => setTimeout(r, 400))
+
+    const result = login(email, password)
+    if (result.success) {
+      router.push('/dashboard')
+    } else {
+      setError(result.error || 'Login failed')
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-bg flex items-center justify-center px-4">
+      <div className="w-full max-w-[400px]">
+        <div className="bg-surface2 border border-border rounded-lg p-8">
+          <div className="text-center mb-8">
+            <h1 className="font-display font-bold text-3xl text-ink tracking-tight">
+              Bite
+            </h1>
+            <p className="text-muted text-sm mt-2">Welcome back</p>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-ink mb-1.5">
+                Email
+              </label>
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="admin@bite.so"
+                className="w-full px-3 py-2.5 bg-surface border border-border rounded-sm text-ink placeholder:text-faint text-sm focus:outline-none focus:ring-2 focus:ring-ink/10 focus:border-ink/20 transition-colors"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-ink mb-1.5">
+                Password
+              </label>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Enter password"
+                className="w-full px-3 py-2.5 bg-surface border border-border rounded-sm text-ink placeholder:text-faint text-sm focus:outline-none focus:ring-2 focus:ring-ink/10 focus:border-ink/20 transition-colors"
+                required
+              />
+            </div>
+
+            {error && (
+              <p className="text-error text-sm font-medium">{error}</p>
+            )}
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full bg-ink text-surface font-medium text-sm py-2.5 rounded-full hover:opacity-90 transition-opacity disabled:opacity-50"
+            >
+              {loading ? 'Signing in...' : 'Sign In'}
+            </button>
+          </form>
+
+          <div className="mt-6 pt-4 border-t border-border">
+            <p className="text-faint text-xs text-center">
+              Demo: admin@bite.so / demo1234
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
