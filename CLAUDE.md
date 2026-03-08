@@ -257,6 +257,31 @@ layout.tsx             — Next.js layouts (required name)
 
 ---
 
+## Mandatory: Update Documentation After Every Change
+
+After completing ANY code change — feature, bugfix, refactor, schema change, new page, new component, etc. — you MUST update documentation before considering the task done. This is not optional.
+
+### What to update:
+1. **`CLAUDE.md`** — Update if the change affects monorepo structure, commands, design system tokens, architecture decisions, phase status, file conventions, or any section that describes the current state of the codebase.
+2. **`README.md`** — Update if the change affects project structure, tech stack, setup instructions, environment variables, roadmap status, or anything user/developer-facing.
+3. **Relevant `.claude/skills/` files** — Update whichever skill file covers the area you changed:
+   - Changed a component pattern? → Update `component.md`
+   - Changed animation approach? → Update `animation.md`
+   - Changed Zustand store patterns? → Update `state.md`
+   - Added/changed an admin page? → Update `admin-page.md`
+   - Added a menu feature? → Update `menu-feature.md`
+   - Changed shared types? → Update `types.md`
+   - Extended mock data? → Update `mock-data.md`
+   - Changed Supabase integration? → Update `supabase.md`
+
+### Rules:
+- Documentation updates are part of the task, not a separate follow-up
+- If you add a new file, directory, or pattern, it must be reflected in docs
+- If you remove or rename something, remove/update it in docs too
+- Keep docs concise and accurate — don't let them drift from reality
+
+---
+
 ## Do Not
 
 - Do not install a new package without checking if one already in the repo solves the problem

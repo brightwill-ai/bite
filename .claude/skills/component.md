@@ -248,3 +248,14 @@ Before finishing any component:
 - [ ] Modals/sheets trap focus and close on `Escape`
 - [ ] Color is not the only indicator of state (badges have text too)
 - [ ] Images have `alt` text (or `alt=""` if decorative)
+
+---
+
+## After You're Done
+
+**You must update documentation before the task is complete.** After making any changes related to this skill area, update:
+1. **`CLAUDE.md`** — if the change affects structure, patterns, or conventions described there
+2. **`README.md`** — if the change affects project structure, setup, or developer-facing info
+3. **This skill file** — if the change introduces new patterns, changes existing ones, or makes any part of this file outdated
+
+Documentation updates are part of the task, not a follow-up.

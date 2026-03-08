@@ -93,3 +93,14 @@ When Supabase is wired in, the types stay the same — they already match the da
 - `created_at: string` (ISO timestamp) on most types — already on `Order`, add to others as needed
 - `updated_at?: string` — optional, add if needed
 - Supabase returns `null` for missing fields, not `undefined` — update optionals from `field?: T` to `field: T | null` when integrating
+
+---
+
+## After You're Done
+
+**You must update documentation before the task is complete.** After making any changes related to this skill area, update:
+1. **`CLAUDE.md`** — if the change affects structure, patterns, or conventions described there
+2. **`README.md`** — if the change affects project structure, setup, or developer-facing info
+3. **This skill file** — if the change introduces new patterns, changes existing ones, or makes any part of this file outdated
+
+Documentation updates are part of the task, not a follow-up.

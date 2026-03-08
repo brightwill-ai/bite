@@ -205,3 +205,14 @@ In Phase 2, this will come from the Supabase `orders` insert response.
 - Don't use `useEffect` to filter items — filter inline during render from the store/mock data
 - Images are emoji for now — when real images come in (Phase 2), use Next.js `<Image>` with proper `sizes` attribute
 - The `CategorySidebar` should NOT re-render on every scroll — make sure `activeCategory` setter doesn't cause the sidebar to do expensive work
+
+---
+
+## After You're Done
+
+**You must update documentation before the task is complete.** After making any changes related to this skill area, update:
+1. **`CLAUDE.md`** — if the change affects structure, patterns, or conventions described there
+2. **`README.md`** — if the change affects project structure, setup, or developer-facing info
+3. **This skill file** — if the change introduces new patterns, changes existing ones, or makes any part of this file outdated
+
+Documentation updates are part of the task, not a follow-up.

@@ -157,3 +157,14 @@ useEffect(() => {
 ```
 
 This pattern gets swapped for a real Supabase query in Phase 2 with zero component changes.
+
+---
+
+## After You're Done
+
+**You must update documentation before the task is complete.** After making any changes related to this skill area, update:
+1. **`CLAUDE.md`** — if the change affects structure, patterns, or conventions described there
+2. **`README.md`** — if the change affects project structure, setup, or developer-facing info
+3. **This skill file** — if the change introduces new patterns, changes existing ones, or makes any part of this file outdated
+
+Documentation updates are part of the task, not a follow-up.

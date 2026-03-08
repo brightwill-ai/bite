@@ -340,6 +340,7 @@ Key things Claude Code will do automatically:
 - Follow the design system without being asked
 - Stay in Phase 1 scope unless explicitly told to move forward
 - Write TypeScript strict-mode compatible code throughout
+- **Update documentation after every change** — `CLAUDE.md`, `README.md`, and relevant `.claude/skills/` files are always kept in sync with the codebase
 
 To start a session:
 ```bash

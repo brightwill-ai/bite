@@ -317,3 +317,14 @@ export function ProtectedLayout({ children }: { children: React.ReactNode }) {
 | Selected item for a sheet | `useState` in parent page |
 | Tab active state | `useState` |
 | Loading/skeleton state | `useState` |
+
+---
+
+## After You're Done
+
+**You must update documentation before the task is complete.** After making any changes related to this skill area, update:
+1. **`CLAUDE.md`** — if the change affects structure, patterns, or conventions described there
+2. **`README.md`** — if the change affects project structure, setup, or developer-facing info
+3. **This skill file** — if the change introduces new patterns, changes existing ones, or makes any part of this file outdated
+
+Documentation updates are part of the task, not a follow-up.
