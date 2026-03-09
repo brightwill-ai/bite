@@ -16,7 +16,8 @@ RUN npm ci
 FROM deps AS builder
 ARG APP
 COPY . .
-RUN npx turbo build --filter=@bite/${APP}
+RUN --mount=type=cache,target=/app/apps/${APP}/.next/cache \
+    npx turbo build --filter=@bite/${APP}
 
 # Production runner
 FROM node:20-alpine AS runner
