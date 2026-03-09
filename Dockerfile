@@ -26,10 +26,11 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=${PORT}
 ENV HOSTNAME=0.0.0.0
+ENV APP=${APP}
 
 COPY --from=builder /app/apps/${APP}/.next/standalone ./
-COPY --from=builder /app/apps/${APP}/.next/static ./.next/static
-COPY --from=builder /app/apps/${APP}/public ./public
+COPY --from=builder /app/apps/${APP}/.next/static ./apps/${APP}/.next/static
+COPY --from=builder /app/apps/${APP}/public ./apps/${APP}/public
 
 EXPOSE ${PORT}
-CMD ["node", "server.js"]
+CMD node apps/${APP}/server.js
