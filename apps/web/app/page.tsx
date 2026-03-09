@@ -442,7 +442,7 @@ export default function LandingPage() {
             </h2>
             <p className="mx-auto mt-4 max-w-xl text-base text-muted">
               Three simple steps to transform your restaurant's ordering
-              experience — no developer required.
+              experience.
             </p>
           </motion.div>
 

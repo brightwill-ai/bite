@@ -161,6 +161,39 @@ font-mono     →  JetBrains Mono     — order/ticket numbers, codes
 
 ---
 
+## Deployment & CI/CD
+
+### Infrastructure
+- **Server**: Single host (`47.251.113.72`), SSH as `root`
+- **Containers**: Docker Compose runs 3 Next.js apps (standalone output)
+  - `bite-web` → port 3000
+  - `bite-menu` → port 3001
+  - `bite-admin` → port 3002
+- **Reverse proxy**: Nginx on the host maps subdomains to container ports
+  - `trybite.us` / `www.trybite.us` → :3000
+  - `menu.trybite.us` → :3001
+  - `admin.trybite.us` → :3002
+- **Nginx config**: `nginx/bite.conf` (symlinked into `/etc/nginx/sites-enabled/` on server)
+
+### Auto-Deploy
+- **Workflow**: `.github/workflows/deploy.yml`
+- **Trigger**: Push to `main` branch
+- **What it does**: SSHs into server → `git pull` → `docker compose up --build -d` → prunes old images
+- **Secrets** (in GitHub repo Settings → Secrets → Actions):
+  - `SERVER_HOST` — server IP
+  - `SERVER_USER` — SSH user
+  - `SERVER_PASSWORD` — SSH password
+
+### Key Files
+```
+Dockerfile              — Multi-stage build, takes APP and PORT args
+docker-compose.yml      — Orchestrates web, menu, admin services
+nginx/bite.conf         — Nginx reverse proxy config
+.github/workflows/deploy.yml — Auto-deploy on push to main
+```
+
+---
+
 ## Phase Map
 
 Understand which phase we're in. Do not build things from future phases.

@@ -133,7 +133,12 @@ bite/
 ├── .claude/
 │   └── skills/                 # Claude Code skill files
 ├── .github/
-│   └── workflows/              # GitHub Actions CI/CD
+│   └── workflows/
+│       └── deploy.yml          # Auto-deploy on push to main
+├── nginx/
+│   └── bite.conf               # Nginx reverse proxy config
+├── Dockerfile                  # Shared multi-stage build
+├── docker-compose.yml          # Orchestrates all 3 apps
 ├── CLAUDE.md                   # Agent instructions
 └── turbo.json
 ```
@@ -267,35 +272,46 @@ Copy `.env.example` to `.env.local` in each app. Never commit `.env.local`.
 
 ## Deployment
 
-Each app runs in its own Docker container on AWS ECS.
+Each app runs in its own Docker container on a single server, behind an Nginx reverse proxy.
 
-### Build a Docker image
+### Architecture
 
-```bash
-# From repo root
-docker build -f apps/web/Dockerfile -t bite-web .
-docker build -f apps/menu/Dockerfile -t bite-menu .
-docker build -f apps/admin/Dockerfile -t bite-admin .
+```
+GitHub (push to main) → GitHub Actions → SSH into server → git pull → docker compose up --build -d
 ```
 
-### Deploy to ECS (manual)
+| Subdomain | Container | Port |
+|---|---|---|
+| `trybite.us` | bite-web | 3000 |
+| `menu.trybite.us` | bite-menu | 3001 |
+| `admin.trybite.us` | bite-admin | 3002 |
+
+### Key Files
+
+| File | Purpose |
+|---|---|
+| `Dockerfile` | Multi-stage build (shared by all 3 apps via `APP` arg) |
+| `docker-compose.yml` | Orchestrates all 3 services |
+| `nginx/bite.conf` | Nginx reverse proxy config |
+| `.github/workflows/deploy.yml` | Auto-deploy on push to `main` |
+
+### Manual Deploy
 
 ```bash
-# Authenticate to ECR
-aws ecr get-login-password --region us-east-1 | \
-  docker login --username AWS --password-stdin <account>.dkr.ecr.us-east-1.amazonaws.com
-
-# Tag and push
-docker tag bite-web:latest <account>.dkr.ecr.us-east-1.amazonaws.com/bite-web:latest
-docker push <account>.dkr.ecr.us-east-1.amazonaws.com/bite-web:latest
-
-# Force ECS to pull the new image
-aws ecs update-service --cluster bite --service bite-web --force-new-deployment
+ssh root@<server-ip>
+cd /root/bite
+git pull origin main
+docker compose up --build -d
 ```
 
-### CI/CD
+### CI/CD (Auto-Deploy)
 
-Pushes to `main` automatically deploy via GitHub Actions (`.github/workflows/`). Pushes to `dev` deploy to staging.
+Pushes to `main` automatically deploy via GitHub Actions (`.github/workflows/deploy.yml`).
+
+**Required GitHub Secrets** (Settings → Secrets → Actions):
+- `SERVER_HOST` — server IP address
+- `SERVER_USER` — SSH user (e.g. `root`)
+- `SERVER_PASSWORD` — SSH password
 
 ---
 
