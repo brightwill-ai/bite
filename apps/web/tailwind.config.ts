@@ -10,6 +10,11 @@ const config: Config = {
   theme: {
     extend: {
       ...sharedConfig.theme.extend,
+      // Override display font to use the next/font CSS variable (no FOUT)
+      fontFamily: {
+        ...sharedConfig.theme.extend.fontFamily,
+        display: ['var(--font-fraunces)', 'serif'],
+      },
     },
   },
   plugins: [],

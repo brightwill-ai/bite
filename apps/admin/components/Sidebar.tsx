@@ -21,13 +21,20 @@ const navItems = [
   { href: '/settings', label: 'Settings', icon: Settings },
 ]
 
-export function Sidebar() {
+interface SidebarProps {
+  restaurantName?: string
+}
+
+export function Sidebar({ restaurantName }: SidebarProps) {
   const pathname = usePathname()
   const router = useRouter()
-  const { restaurantName, logout } = useAuthStore()
+  const storeRestaurantName = useAuthStore((state) => state.restaurantName)
+  const logout = useAuthStore((state) => state.logout)
+
+  const displayRestaurantName = restaurantName ?? storeRestaurantName
 
   const handleLogout = () => {
-    logout()
+    void logout()
     router.push('/login')
   }
 
@@ -38,7 +45,7 @@ export function Sidebar() {
         <h1 className="font-display font-bold text-xl text-ink tracking-tight">
           Bite
         </h1>
-        <p className="text-muted text-xs mt-0.5">{restaurantName}</p>
+        <p className="text-muted text-xs mt-0.5">{displayRestaurantName}</p>
       </div>
 
       {/* Navigation */}

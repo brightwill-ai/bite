@@ -1,7 +1,7 @@
 'use client'
 
-import { useState, useMemo } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { useState, useMemo, useEffect } from 'react'
+import { motion } from 'framer-motion'
 import { X, Plus, Minus, Check } from 'lucide-react'
 import type { MenuItem, ModifierGroup, Modifier, SelectedModifier } from '@bite/types'
 import { cn } from '@/lib/utils'
@@ -70,6 +70,15 @@ export default function ItemDetailSheet({
     return total * quantity
   }, [item.price, selected, quantity, modifiers])
 
+  // Close on Escape key
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onClose])
+
   const handleAdd = () => {
     if (!isValid) return
     const selectedMods: SelectedModifier[] = []
@@ -91,48 +100,52 @@ export default function ItemDetailSheet({
   }
 
   return (
-    <AnimatePresence>
+    <motion.div
+      className="fixed inset-0 z-50 flex items-end justify-center"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+    >
+      {/* Backdrop */}
       <motion.div
-        className="fixed inset-0 z-50 flex items-end justify-center"
+        className="absolute inset-0 bg-black/50"
+        aria-hidden="true"
+        onClick={onClose}
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
+      />
+
+      {/* Sheet */}
+      <motion.div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="item-detail-title"
+        className="relative w-full max-w-[430px] max-h-[90vh] bg-surface2 rounded-t-[20px] overflow-hidden flex flex-col"
+        initial={{ y: '100%' }}
+        animate={{ y: 0 }}
+        exit={{ y: '100%' }}
+        transition={springConfig}
+        drag="y"
+        dragConstraints={{ top: 0 }}
+        dragElastic={0.2}
+        onDragEnd={(_, info) => {
+          if (info.offset.y > 150) onClose()
+        }}
       >
-        {/* Backdrop */}
-        <motion.div
-          className="absolute inset-0 bg-black/50"
+        {/* Drag handle */}
+        <div className="flex justify-center pt-3 pb-2">
+          <div className="w-10 h-1 rounded-full bg-border" />
+        </div>
+
+        {/* Close button */}
+        <button
           onClick={onClose}
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-        />
-
-        {/* Sheet */}
-        <motion.div
-          className="relative w-full max-w-[430px] max-h-[90vh] bg-surface2 rounded-t-[20px] overflow-hidden flex flex-col"
-          initial={{ y: '100%' }}
-          animate={{ y: 0 }}
-          exit={{ y: '100%' }}
-          transition={springConfig}
-          drag="y"
-          dragConstraints={{ top: 0 }}
-          dragElastic={0.2}
-          onDragEnd={(_, info) => {
-            if (info.offset.y > 150) onClose()
-          }}
+          aria-label="Close"
+          className="absolute top-3 right-3 w-8 h-8 rounded-full bg-bg flex items-center justify-center z-10"
         >
-          {/* Drag handle */}
-          <div className="flex justify-center pt-3 pb-2">
-            <div className="w-10 h-1 rounded-full bg-border" />
-          </div>
-
-          {/* Close button */}
-          <button
-            onClick={onClose}
-            className="absolute top-3 right-3 w-8 h-8 rounded-full bg-bg flex items-center justify-center z-10"
-          >
-            <X className="w-4 h-4 text-ink" />
-          </button>
+          <X className="w-4 h-4 text-ink" />
+        </button>
 
           {/* Content - scrollable */}
           <div className="overflow-y-auto flex-1 pb-4">
@@ -143,7 +156,7 @@ export default function ItemDetailSheet({
 
             {/* Item info */}
             <div className="px-4 pt-4">
-              <h2 className="font-display text-[22px] font-bold text-ink">{item.name}</h2>
+              <h2 id="item-detail-title" className="font-display text-[22px] font-bold text-ink">{item.name}</h2>
               <p className="text-[14px] text-muted mt-1">{item.description}</p>
               <p className="font-display text-[20px] font-bold text-ink mt-2">
                 {formatPrice(item.price)}
@@ -265,12 +278,13 @@ export default function ItemDetailSheet({
                     : 'bg-ink/40 text-surface/60 cursor-not-allowed'
                 )}
               >
-                Add to Order · {formatPrice(calculatedPrice)}
+                {isValid
+                  ? `Add to Order · ${formatPrice(calculatedPrice)}`
+                  : 'Select required options'}
               </button>
             </div>
           </div>
         </motion.div>
       </motion.div>
-    </AnimatePresence>
   )
 }

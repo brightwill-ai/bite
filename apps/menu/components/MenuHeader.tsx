@@ -29,7 +29,8 @@ export default function MenuHeader({
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted" />
           <input
-            type="text"
+            type="search"
+            aria-label="Search menu items"
             placeholder="Search menu..."
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}

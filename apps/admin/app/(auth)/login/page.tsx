@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { useAuthStore } from '@/store/auth'
 
 export default function LoginPage() {
@@ -17,10 +18,7 @@ export default function LoginPage() {
     setError('')
     setLoading(true)
 
-    // Small delay for UX
-    await new Promise((r) => setTimeout(r, 400))
-
-    const result = login(email, password)
+    const result = await login(email, password)
     if (result.success) {
       router.push('/dashboard')
     } else {
@@ -49,7 +47,7 @@ export default function LoginPage() {
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="admin@bite.so"
+                placeholder="you@example.com"
                 className="w-full px-3 py-2.5 bg-surface border border-border rounded-sm text-ink placeholder:text-faint text-sm focus:outline-none focus:ring-2 focus:ring-ink/10 focus:border-ink/20 transition-colors"
                 required
               />
@@ -82,9 +80,12 @@ export default function LoginPage() {
             </button>
           </form>
 
-          <div className="mt-6 pt-4 border-t border-border">
-            <p className="text-faint text-xs text-center">
-              Demo: admin@bite.so / demo1234
+          <div className="mt-6 pt-4 border-t border-border text-center">
+            <p className="text-sm text-muted">
+              Don&apos;t have an account?{' '}
+              <Link href="/signup" className="text-ink font-medium hover:underline">
+                Sign up
+              </Link>
             </p>
           </div>
         </div>

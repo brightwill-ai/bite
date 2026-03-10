@@ -1,5 +1,5 @@
 import type { Metadata } from 'next'
-import { DM_Sans, JetBrains_Mono } from 'next/font/google'
+import { DM_Sans, JetBrains_Mono, Fraunces } from 'next/font/google'
 import { Toaster } from 'react-hot-toast'
 import './globals.css'
 
@@ -15,9 +15,31 @@ const jetbrainsMono = JetBrains_Mono({
   weight: ['400', '600'],
 })
 
+const fraunces = Fraunces({
+  subsets: ['latin'],
+  variable: '--font-fraunces',
+  weight: ['300', '400', '700', '900'],
+  style: ['normal', 'italic'],
+})
+
 export const metadata: Metadata = {
   title: 'Bite — QR Table-Side Ordering for Restaurants',
-  description: 'Customers scan, order, and pay — all from their phone. No app download. No waiting. Just faster tables and happier guests.',
+  description:
+    'Customers scan, order, and pay — all from their phone. No app download. No waiting. Just faster tables and happier guests.',
+  keywords: ['QR ordering', 'restaurant technology', 'table-side ordering', 'digital menu'],
+  openGraph: {
+    title: 'Bite — QR Table-Side Ordering for Restaurants',
+    description:
+      'Customers scan, order, and pay — all from their phone. No app download. No waiting.',
+    type: 'website',
+    siteName: 'Bite',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'Bite — QR Table-Side Ordering for Restaurants',
+    description:
+      'Customers scan, order, and pay — all from their phone. No app download. No waiting.',
+  },
 }
 
 export default function RootLayout({
@@ -26,15 +48,10 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="en" className={`${dmSans.variable} ${jetbrainsMono.variable}`}>
-      <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,700;0,9..144,900;1,9..144,300;1,9..144,400;1,9..144,700;1,9..144,900&display=swap"
-          rel="stylesheet"
-        />
-      </head>
+    <html
+      lang="en"
+      className={`${dmSans.variable} ${jetbrainsMono.variable} ${fraunces.variable}`}
+    >
       <body className={`${dmSans.className} bg-bg text-ink antialiased`}>
         {children}
         <Toaster

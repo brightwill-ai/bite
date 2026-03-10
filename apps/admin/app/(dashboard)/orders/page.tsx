@@ -1,116 +1,30 @@
 'use client'
 
-import { useState } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
-import { X, Clock, ChevronRight } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import type { QueryData } from '@supabase/supabase-js'
+import { AnimatePresence, motion } from 'framer-motion'
+import { ChevronRight, Clock, X } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
+import { createClient } from '@/lib/supabase/client'
+import { useAuthStore } from '@/store/auth'
 import type { OrderStatus } from '@bite/types'
 
-interface MockOrder {
+interface UiOrderItem {
+  name: string
+  quantity: number
+  price: number
+}
+
+interface UiOrder {
   id: string
   ticket_number: string
   table: string
-  items: { name: string; quantity: number; price: number }[]
+  items: UiOrderItem[]
   status: OrderStatus
   time: string
   total: number
   special_instructions: string
 }
-
-const mockOrders: MockOrder[] = [
-  {
-    id: 'ord-001',
-    ticket_number: '#047',
-    table: 'T-3',
-    items: [
-      { name: 'Margherita', quantity: 1, price: 1800 },
-      { name: 'Truffle Fries', quantity: 2, price: 900 },
-    ],
-    status: 'preparing',
-    time: '2 min ago',
-    total: 3600,
-    special_instructions: 'Extra crispy fries please',
-  },
-  {
-    id: 'ord-002',
-    ticket_number: '#046',
-    table: 'T-7',
-    items: [
-      { name: 'Grilled Ribeye', quantity: 1, price: 3800 },
-      { name: 'House Red Wine', quantity: 2, price: 1400 },
-    ],
-    status: 'confirmed',
-    time: '5 min ago',
-    total: 6600,
-    special_instructions: '',
-  },
-  {
-    id: 'ord-003',
-    ticket_number: '#045',
-    table: 'T-1',
-    items: [
-      { name: 'Cacio e Pepe', quantity: 1, price: 1900 },
-      { name: 'Tiramisu', quantity: 1, price: 1400 },
-      { name: 'Espresso', quantity: 1, price: 450 },
-    ],
-    status: 'ready',
-    time: '8 min ago',
-    total: 3750,
-    special_instructions: 'Nut allergy - no walnuts',
-  },
-  {
-    id: 'ord-004',
-    ticket_number: '#044',
-    table: 'T-11',
-    items: [
-      { name: 'Pan-Seared Salmon', quantity: 1, price: 2900 },
-      { name: 'Sparkling Water', quantity: 1, price: 600 },
-    ],
-    status: 'delivered',
-    time: '15 min ago',
-    total: 3500,
-    special_instructions: '',
-  },
-  {
-    id: 'ord-005',
-    ticket_number: '#043',
-    table: 'T-5',
-    items: [
-      { name: 'Burrata & Heirloom Tomato', quantity: 1, price: 1650 },
-      { name: 'Pepperoni', quantity: 1, price: 2000 },
-    ],
-    status: 'delivered',
-    time: '22 min ago',
-    total: 3650,
-    special_instructions: '',
-  },
-  {
-    id: 'ord-006',
-    ticket_number: '#042',
-    table: 'T-9',
-    items: [
-      { name: 'Mushroom Risotto', quantity: 2, price: 2200 },
-      { name: 'Garlic Bread', quantity: 1, price: 750 },
-    ],
-    status: 'pending',
-    time: '1 min ago',
-    total: 5150,
-    special_instructions: 'One risotto extra truffle oil',
-  },
-  {
-    id: 'ord-007',
-    ticket_number: '#041',
-    table: 'T-2',
-    items: [
-      { name: 'Lobster Linguine', quantity: 1, price: 3400 },
-      { name: 'Fresh Lemonade', quantity: 2, price: 750 },
-    ],
-    status: 'preparing',
-    time: '4 min ago',
-    total: 4900,
-    special_instructions: '',
-  },
-]
 
 const filterTabs: { label: string; value: OrderStatus | 'all' }[] = [
   { label: 'All', value: 'all' },
@@ -119,6 +33,32 @@ const filterTabs: { label: string; value: OrderStatus | 'all' }[] = [
   { label: 'Ready', value: 'ready' },
   { label: 'Delivered', value: 'delivered' },
 ]
+
+const PAGE_SIZE = 25
+
+function formatRelativeTime(iso: string | null): string {
+  if (!iso) {
+    return 'just now'
+  }
+  const diffMs = Date.now() - new Date(iso).getTime()
+  const diffMinutes = Math.max(1, Math.floor(diffMs / 60000))
+  if (diffMinutes < 60) {
+    return `${diffMinutes} min ago`
+  }
+  const diffHours = Math.floor(diffMinutes / 60)
+  if (diffHours < 24) {
+    return `${diffHours} hr ago`
+  }
+  const diffDays = Math.floor(diffHours / 24)
+  return `${diffDays} day${diffDays === 1 ? '' : 's'} ago`
+}
+
+function normalizeStatus(value: string): OrderStatus {
+  if (value === 'confirmed' || value === 'preparing' || value === 'ready' || value === 'delivered') {
+    return value
+  }
+  return 'pending'
+}
 
 function StatusBadge({ status }: { status: OrderStatus }) {
   const styles: Record<OrderStatus, string> = {
@@ -141,7 +81,7 @@ function OrderDetailDrawer({
   onClose,
   onUpdateStatus,
 }: {
-  order: MockOrder
+  order: UiOrder
   onClose: () => void
   onUpdateStatus: (id: string, status: OrderStatus) => void
 }) {
@@ -164,7 +104,9 @@ function OrderDetailDrawer({
       <div className="flex items-center justify-between p-5 border-b border-border">
         <div>
           <h2 className="font-display font-bold text-lg">Order {order.ticket_number}</h2>
-          <p className="text-xs text-muted mt-0.5">{order.table} &middot; {order.time}</p>
+          <p className="text-xs text-muted mt-0.5">
+            {order.table} &middot; {order.time}
+          </p>
         </div>
         <button onClick={onClose} className="p-1 hover:bg-bg rounded-sm transition-colors">
           <X size={18} />
@@ -172,7 +114,6 @@ function OrderDetailDrawer({
       </div>
 
       <div className="flex-1 overflow-y-auto p-5 space-y-5">
-        {/* Status */}
         <div>
           <span className="text-xs font-medium text-muted uppercase tracking-wider">Status</span>
           <div className="mt-1.5">
@@ -180,44 +121,37 @@ function OrderDetailDrawer({
           </div>
         </div>
 
-        {/* Items */}
         <div>
           <span className="text-xs font-medium text-muted uppercase tracking-wider">Items</span>
           <div className="mt-2 space-y-2">
-            {order.items.map((item, i) => (
-              <div key={i} className="flex items-center justify-between py-2 border-b border-border last:border-0">
+            {order.items.map((item, index) => (
+              <div
+                key={`${item.name}-${index}`}
+                className="flex items-center justify-between py-2 border-b border-border last:border-0"
+              >
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium text-ink">{item.quantity}x</span>
                   <span className="text-sm text-ink">{item.name}</span>
                 </div>
-                <span className="font-mono text-sm text-muted">
-                  ${((item.price * item.quantity) / 100).toFixed(2)}
-                </span>
+                <span className="font-mono text-sm text-muted">${((item.price * item.quantity) / 100).toFixed(2)}</span>
               </div>
             ))}
           </div>
         </div>
 
-        {/* Special Instructions */}
         {order.special_instructions && (
           <div>
             <span className="text-xs font-medium text-muted uppercase tracking-wider">Special Instructions</span>
-            <p className="mt-1.5 text-sm text-ink bg-surface border border-border rounded-sm p-3">
-              {order.special_instructions}
-            </p>
+            <p className="mt-1.5 text-sm text-ink bg-surface border border-border rounded-sm p-3">{order.special_instructions}</p>
           </div>
         )}
 
-        {/* Total */}
         <div className="flex items-center justify-between pt-3 border-t border-border">
           <span className="text-sm font-medium text-ink">Total</span>
-          <span className="font-display font-bold text-lg text-ink">
-            ${(order.total / 100).toFixed(2)}
-          </span>
+          <span className="font-display font-bold text-lg text-ink">${(order.total / 100).toFixed(2)}</span>
         </div>
       </div>
 
-      {/* Action */}
       {next && (
         <div className="p-5 border-t border-border">
           <button
@@ -234,33 +168,122 @@ function OrderDetailDrawer({
 }
 
 export default function OrdersPage() {
-  const [orders, setOrders] = useState<MockOrder[]>(mockOrders)
+  const supabase = useMemo(() => createClient(), [])
+  const restaurantId = useAuthStore((state) => state.restaurant?.id ?? null)
+
+  const [orders, setOrders] = useState<UiOrder[]>([])
   const [filter, setFilter] = useState<OrderStatus | 'all'>('all')
-  const [selectedOrder, setSelectedOrder] = useState<MockOrder | null>(null)
+  const [selectedOrder, setSelectedOrder] = useState<UiOrder | null>(null)
+  const [isLoading, setIsLoading] = useState(false)
+  const [page, setPage] = useState(1)
 
-  const filteredOrders = filter === 'all' ? orders : orders.filter((o) => o.status === filter)
+  useEffect(() => {
+    const loadOrders = async () => {
+      if (!restaurantId) {
+        setOrders([])
+        return
+      }
 
-  const handleUpdateStatus = (id: string, status: OrderStatus) => {
-    setOrders((prev) =>
-      prev.map((o) => (o.id === id ? { ...o, status } : o))
-    )
-    setSelectedOrder((prev) => (prev?.id === id ? { ...prev, status } : prev))
+      setIsLoading(true)
+      const query = supabase
+        .from('orders')
+        .select(
+          `
+            id,
+            ticket_number,
+            status,
+            special_instructions,
+            total,
+            created_at,
+            table:tables(table_number, label),
+            order_items(
+              id,
+              item_name,
+              item_price,
+              quantity,
+              subtotal,
+              order_item_modifiers(name, price_delta)
+            )
+          `
+        )
+        .eq('restaurant_id', restaurantId)
+        .order('created_at', { ascending: false })
+
+      type OrderQueryRow = QueryData<typeof query>[number]
+      const { data, error } = await query
+
+      if (error || !data) {
+        setIsLoading(false)
+        setOrders([])
+        return
+      }
+
+      const normalized: UiOrder[] = data.map((row: OrderQueryRow) => {
+        const ticket = `#${String(row.ticket_number).padStart(3, '0')}`
+        const tableLabel = row.table?.label || row.table?.table_number
+          ? `T-${row.table?.label ?? row.table?.table_number ?? '?'}`
+          : 'T-?'
+
+        const orderItems: UiOrderItem[] = (row.order_items ?? []).map((item) => ({
+          name: item.item_name,
+          quantity: item.quantity,
+          price: Math.round(item.item_price * 100),
+        }))
+
+        return {
+          id: row.id,
+          ticket_number: ticket,
+          table: tableLabel,
+          items: orderItems,
+          status: normalizeStatus(row.status),
+          time: formatRelativeTime(row.created_at),
+          total: Math.round((row.total ?? 0) * 100),
+          special_instructions: row.special_instructions ?? '',
+        }
+      })
+
+      setOrders(normalized)
+      setIsLoading(false)
+    }
+
+    void loadOrders()
+  }, [restaurantId, supabase])
+
+  const filteredOrders = filter === 'all' ? orders : orders.filter((order) => order.status === filter)
+  const pageCount = Math.max(1, Math.ceil(filteredOrders.length / PAGE_SIZE))
+  const paginatedOrders = filteredOrders.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
+
+  useEffect(() => {
+    setPage(1)
+  }, [filter])
+
+  useEffect(() => {
+    if (page > pageCount) {
+      setPage(pageCount)
+    }
+  }, [page, pageCount])
+
+  const handleUpdateStatus = async (id: string, status: OrderStatus) => {
+    const { error } = await supabase.from('orders').update({ status }).eq('id', id)
+    if (error) {
+      return
+    }
+
+    setOrders((previous) => previous.map((order) => (order.id === id ? { ...order, status } : order)))
+    setSelectedOrder((previous) => (previous?.id === id ? { ...previous, status } : previous))
   }
 
   return (
     <div className="space-y-6">
       <PageHeader title="Orders" description="Track and manage incoming orders" />
 
-      {/* Filter Tabs */}
       <div className="flex items-center gap-1 bg-surface border border-border rounded-full p-1 w-fit">
         {filterTabs.map((tab) => (
           <button
             key={tab.value}
             onClick={() => setFilter(tab.value)}
             className={`px-4 py-1.5 rounded-full text-sm font-medium transition-colors ${
-              filter === tab.value
-                ? 'bg-ink text-surface'
-                : 'text-muted hover:text-ink'
+              filter === tab.value ? 'bg-ink text-surface' : 'text-muted hover:text-ink'
             }`}
           >
             {tab.label}
@@ -268,7 +291,6 @@ export default function OrdersPage() {
         ))}
       </div>
 
-      {/* Orders Table */}
       <div className="bg-surface2 border border-border rounded overflow-hidden">
         <table className="w-full">
           <thead>
@@ -282,18 +304,16 @@ export default function OrdersPage() {
             </tr>
           </thead>
           <tbody>
-            {filteredOrders.map((order) => (
+            {paginatedOrders.map((order) => (
               <tr
                 key={order.id}
                 onClick={() => setSelectedOrder(order)}
                 className="border-b border-border last:border-0 hover:bg-bg/50 cursor-pointer transition-colors"
               >
-                <td className="px-4 py-3 font-mono text-sm font-semibold text-ink">
-                  {order.ticket_number}
-                </td>
+                <td className="px-4 py-3 font-mono text-sm font-semibold text-ink">{order.ticket_number}</td>
                 <td className="px-4 py-3 text-sm text-muted">{order.table}</td>
                 <td className="px-4 py-3 text-sm text-ink truncate max-w-[250px]">
-                  {order.items.map((i) => `${i.quantity}x ${i.name}`).join(', ')}
+                  {order.items.map((item) => `${item.quantity}x ${item.name}`).join(', ')}
                 </td>
                 <td className="px-4 py-3">
                   <StatusBadge status={order.status} />
@@ -304,22 +324,43 @@ export default function OrdersPage() {
                     {order.time}
                   </span>
                 </td>
-                <td className="px-4 py-3 text-right font-mono text-sm font-medium text-ink">
-                  ${(order.total / 100).toFixed(2)}
-                </td>
+                <td className="px-4 py-3 text-right font-mono text-sm font-medium text-ink">${(order.total / 100).toFixed(2)}</td>
               </tr>
             ))}
           </tbody>
         </table>
 
-        {filteredOrders.length === 0 && (
-          <div className="py-12 text-center text-sm text-muted">
-            No orders match this filter
+        {isLoading && <div className="py-8 text-center text-sm text-muted">Loading orders...</div>}
+
+        {!isLoading && filteredOrders.length === 0 && (
+          <div className="py-12 text-center text-sm text-muted">No orders match this filter</div>
+        )}
+
+        {!isLoading && filteredOrders.length > PAGE_SIZE && (
+          <div className="flex items-center justify-between px-4 py-3 border-t border-border bg-surface2">
+            <span className="text-xs text-muted">
+              Page {page} of {pageCount}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setPage((current) => Math.max(1, current - 1))}
+                disabled={page <= 1}
+                className="px-3 py-1.5 text-xs border border-border rounded disabled:opacity-40"
+              >
+                Previous
+              </button>
+              <button
+                onClick={() => setPage((current) => Math.min(pageCount, current + 1))}
+                disabled={page >= pageCount}
+                className="px-3 py-1.5 text-xs border border-border rounded disabled:opacity-40"
+              >
+                Next
+              </button>
+            </div>
           </div>
         )}
       </div>
 
-      {/* Order Detail Drawer */}
       <AnimatePresence>
         {selectedOrder && (
           <>
@@ -333,7 +374,9 @@ export default function OrdersPage() {
             <OrderDetailDrawer
               order={selectedOrder}
               onClose={() => setSelectedOrder(null)}
-              onUpdateStatus={handleUpdateStatus}
+              onUpdateStatus={(id, status) => {
+                void handleUpdateStatus(id, status)
+              }}
             />
           </>
         )}

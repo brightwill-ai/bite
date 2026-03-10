@@ -1,11 +1,12 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
 import { ChevronDown, ChevronRight, Plus, Upload, Pencil, X } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
 import { useMenuStore } from '@/store/menu'
+import { useAuthStore } from '@/store/auth'
 import type { MenuItem, MenuCategory } from '@bite/types'
 
 function AvailabilityToggle({ available, onToggle }: { available: boolean; onToggle: () => void }) {
@@ -205,17 +206,41 @@ function CategoryAccordion({
 
 export default function MenuPage() {
   const router = useRouter()
-  const { categories, items, toggleAvailability, updateItem, addItem, addCategory } = useMenuStore()
+  const restaurantId = useAuthStore((state) => state.restaurant?.id ?? null)
+  const {
+    isLoading,
+    categories,
+    items,
+    loadMenu,
+    toggleAvailability,
+    updateItem,
+    addItem,
+  } = useMenuStore((state) => ({
+    isLoading: state.isLoading,
+    categories: state.categories,
+    items: state.items,
+    loadMenu: state.loadMenu,
+    toggleAvailability: state.toggleAvailability,
+    updateItem: state.updateItem,
+    addItem: state.addItem,
+  }))
   const [editingItem, setEditingItem] = useState<MenuItem | null>(null)
   const [showAddItem, setShowAddItem] = useState(false)
   const [newItemCategoryId, setNewItemCategoryId] = useState('')
   const [newItemName, setNewItemName] = useState('')
   const [newItemPrice, setNewItemPrice] = useState('')
 
+  useEffect(() => {
+    if (!restaurantId) {
+      return
+    }
+    void loadMenu(restaurantId)
+  }, [restaurantId, loadMenu])
+
   const handleAddItem = () => {
-    if (!newItemName || !newItemPrice || !newItemCategoryId) return
-    addItem({
-      restaurant_id: 'rest-001',
+    if (!newItemName || !newItemPrice || !newItemCategoryId || !restaurantId) return
+    void addItem({
+      restaurant_id: restaurantId,
       category_id: newItemCategoryId,
       name: newItemName,
       description: '',
@@ -255,6 +280,12 @@ export default function MenuPage() {
           </div>
         }
       />
+
+      {isLoading && (
+        <div className="bg-surface2 border border-border rounded p-5 text-sm text-muted">
+          Loading menu...
+        </div>
+      )}
 
       <AnimatePresence>
         {showAddItem && (
@@ -322,6 +353,11 @@ export default function MenuPage() {
             />
           )
         })}
+        {!isLoading && categories.length === 0 && (
+          <div className="bg-surface2 border border-border rounded p-6 text-sm text-muted">
+            No menu categories yet. Upload a PDF or add your first item.
+          </div>
+        )}
       </div>
 
       <AnimatePresence>

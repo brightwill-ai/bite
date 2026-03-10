@@ -1,305 +1,299 @@
-'use client'
-
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { AnimatePresence } from 'framer-motion'
-import toast from 'react-hot-toast'
-import type { MenuItem, ModifierGroup, Modifier, SelectedModifier } from '@bite/types'
-import {
-  mockRestaurant,
-  mockCategories,
-  mockItems,
-  mockModifierGroups,
-  mockModifiers,
-} from '@bite/types/mock'
-import { useCartStore } from '@/store/cart'
-import MenuHeader from '@/components/MenuHeader'
-import CategorySidebar from '@/components/CategorySidebar'
-import MenuItemCard from '@/components/MenuItemCard'
-import ItemDetailSheet from '@/components/ItemDetailSheet'
-import FloatingCartBar from '@/components/FloatingCartBar'
-import CartSheet from '@/components/CartSheet'
-import OrderConfirmation from '@/components/OrderConfirmation'
+import { notFound } from 'next/navigation'
+import type { MenuItem, Modifier, ModifierGroup, Restaurant, Table } from '@bite/types'
+import MenuTableClientPage, { type InitialMenuData, type MenuCategory } from '@/components/MenuTableClientPage'
+import { createClient } from '@/lib/supabase/server'
 
 interface PageProps {
   params: { slug: string; tableId: string }
 }
 
-export default function MenuPage({ params }: PageProps) {
-  const { slug, tableId } = params
-  const restaurant = mockRestaurant
-  const categories = mockCategories
-    .filter((c) => c.is_available)
-    .sort((a, b) => a.display_order - b.display_order)
-  const menuItems = mockItems.sort((a, b) => a.display_order - b.display_order)
+function toRestaurant(row: {
+  id: string
+  name: string
+  slug: string
+  logo_url: string | null
+  cuisine_type: string | null
+  address: string | null
+  timezone: string | null
+  is_active: boolean | null
+  subscription_tier: string | null
+  printnode_api_key: string | null
+  printnode_printer_id: string | null
+  adyen_merchant_id: string | null
+  created_at: string | null
+  updated_at: string | null
+}): Restaurant {
+  const subscription = row.subscription_tier
+  const subscriptionTier =
+    subscription === 'starter' || subscription === 'pro' || subscription === 'enterprise'
+      ? subscription
+      : 'free'
 
-  // Cart store
-  const cart = useCartStore()
+  return {
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+    logo_url: row.logo_url ?? undefined,
+    cuisine_type: row.cuisine_type ?? undefined,
+    address: row.address ?? undefined,
+    timezone: row.timezone ?? undefined,
+    is_active: row.is_active ?? true,
+    subscription_tier: subscriptionTier,
+    printnode_api_key: row.printnode_api_key ?? undefined,
+    printnode_printer_id: row.printnode_printer_id ?? undefined,
+    adyen_merchant_id: row.adyen_merchant_id ?? undefined,
+    created_at: row.created_at ?? undefined,
+    updated_at: row.updated_at ?? undefined,
+  }
+}
 
-  // Local state
-  const [searchQuery, setSearchQuery] = useState('')
-  const [activeCategory, setActiveCategory] = useState(categories[0]?.id || '')
-  const [selectedItem, setSelectedItem] = useState<MenuItem | null>(null)
-  const [cartOpen, setCartOpen] = useState(false)
-  const [confirmed, setConfirmed] = useState(false)
-  const [confirmedItems, setConfirmedItems] = useState<typeof cart.items>([])
-  const [confirmedTotal, setConfirmedTotal] = useState(0)
-  const [ticketNumber, setTicketNumber] = useState('')
-  const [bounceKey, setBounceKey] = useState(0)
-  const [isScrollingFromClick, setIsScrollingFromClick] = useState(false)
+function toTable(row: {
+  id: string
+  restaurant_id: string
+  table_number: string
+  label: string | null
+  qr_code_url: string | null
+  is_active: boolean | null
+  created_at: string | null
+  updated_at: string | null
+}): Table {
+  return {
+    id: row.id,
+    restaurant_id: row.restaurant_id,
+    table_number: row.table_number,
+    label: row.label ?? undefined,
+    qr_code_url: row.qr_code_url ?? undefined,
+    is_active: row.is_active ?? true,
+    created_at: row.created_at ?? undefined,
+    updated_at: row.updated_at ?? undefined,
+  }
+}
 
-  // Refs for intersection observer
-  const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({})
-  const scrollContainerRef = useRef<HTMLDivElement | null>(null)
+function toCategory(row: {
+  id: string
+  restaurant_id: string
+  name: string
+  display_order: number | null
+  is_available: boolean | null
+}): MenuCategory {
+  return {
+    id: row.id,
+    restaurant_id: row.restaurant_id,
+    name: row.name,
+    display_order: row.display_order ?? 0,
+    is_available: row.is_available ?? true,
+  }
+}
 
-  // Set cart context on mount
-  useEffect(() => {
-    cart.setContext(restaurant.id, tableId, restaurant.name)
-  }, [restaurant.id, tableId, restaurant.name])
+function toMenuItem(row: {
+  id: string
+  restaurant_id: string
+  category_id: string
+  name: string
+  description: string | null
+  price: number
+  image_url: string | null
+  emoji: string | null
+  is_available: boolean | null
+  is_popular: boolean | null
+  is_new: boolean | null
+  needs_review: boolean | null
+  display_order: number | null
+}): MenuItem {
+  return {
+    id: row.id,
+    restaurant_id: row.restaurant_id,
+    category_id: row.category_id,
+    name: row.name,
+    description: row.description ?? undefined,
+    price: row.price,
+    image_url: row.image_url ?? undefined,
+    emoji: row.emoji ?? undefined,
+    is_available: row.is_available ?? true,
+    is_popular: row.is_popular ?? false,
+    is_new: row.is_new ?? false,
+    needs_review: row.needs_review ?? false,
+    display_order: row.display_order ?? 0,
+  }
+}
 
-  // Filter items by search
-  const filteredItems = useMemo(() => {
-    if (!searchQuery.trim()) return menuItems
-    const q = searchQuery.toLowerCase()
-    return menuItems.filter(
-      (item) =>
-        item.name.toLowerCase().includes(q) ||
-        (item.description?.toLowerCase().includes(q) ?? false)
+function toModifierGroup(row: {
+  id: string
+  item_id: string
+  name: string
+  selection_type: string
+  is_required: boolean | null
+  min_selections: number | null
+  max_selections: number | null
+  display_order: number | null
+}): ModifierGroup {
+  return {
+    id: row.id,
+    item_id: row.item_id,
+    name: row.name,
+    selection_type: row.selection_type === 'multiple' ? 'multiple' : 'single',
+    is_required: row.is_required ?? false,
+    min_selections: row.min_selections ?? 0,
+    max_selections: row.max_selections ?? 1,
+    display_order: row.display_order ?? 0,
+  }
+}
+
+function toModifier(row: {
+  id: string
+  group_id: string
+  name: string
+  price_delta: number | null
+  is_available: boolean | null
+  display_order: number | null
+  emoji: string | null
+}): Modifier {
+  return {
+    id: row.id,
+    group_id: row.group_id,
+    name: row.name,
+    price_delta: row.price_delta ?? 0,
+    is_available: row.is_available ?? true,
+    display_order: row.display_order ?? 0,
+    emoji: row.emoji ?? undefined,
+  }
+}
+
+export default async function MenuPage({ params }: PageProps) {
+  const supabase = createClient()
+
+  const { data: restaurantRow, error: restaurantError } = await supabase
+    .from('restaurants')
+    .select(
+      `
+        id,
+        name,
+        slug,
+        logo_url,
+        cuisine_type,
+        address,
+        timezone,
+        is_active,
+        subscription_tier,
+        printnode_api_key,
+        printnode_printer_id,
+        adyen_merchant_id,
+        created_at,
+        updated_at
+      `
     )
-  }, [menuItems, searchQuery])
+    .eq('slug', params.slug)
+    .eq('is_active', true)
+    .single()
 
-  // Group items by category
-  const itemsByCategory = useMemo(() => {
-    const map: Record<string, MenuItem[]> = {}
-    categories.forEach((cat) => {
-      map[cat.id] = filteredItems.filter((item) => item.category_id === cat.id)
-    })
-    return map
-  }, [categories, filteredItems])
+  if (restaurantError || !restaurantRow) {
+    notFound()
+  }
 
-  // Check if item has modifiers
-  const hasModifiers = useCallback((itemId: string) => {
-    return !!(mockModifierGroups[itemId] && mockModifierGroups[itemId].length > 0)
-  }, [])
+  const restaurant = toRestaurant(restaurantRow)
 
-  // Get modifier groups for an item
-  const getModifierGroups = useCallback((itemId: string): ModifierGroup[] => {
-    return mockModifierGroups[itemId] || []
-  }, [])
+  const { data: tableRow, error: tableError } = await supabase
+    .from('tables')
+    .select('id, restaurant_id, table_number, label, qr_code_url, is_active, created_at, updated_at')
+    .eq('restaurant_id', restaurant.id)
+    .eq('table_number', params.tableId)
+    .eq('is_active', true)
+    .single()
 
-  // IntersectionObserver to sync scroll with sidebar
-  useEffect(() => {
-    const container = scrollContainerRef.current
-    if (!container) return
+  if (tableError || !tableRow) {
+    notFound()
+  }
 
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (isScrollingFromClick) return
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            const catId = entry.target.getAttribute('data-category-id')
-            if (catId) setActiveCategory(catId)
-            break
-          }
-        }
-      },
-      {
-        root: container,
-        rootMargin: '-20% 0px -60% 0px',
-        threshold: 0,
+  const table = toTable(tableRow)
+
+  const { data: categoryRows, error: categoryError } = await supabase
+    .from('menu_categories')
+    .select('id, restaurant_id, name, display_order, is_available')
+    .eq('restaurant_id', restaurant.id)
+    .eq('is_available', true)
+    .order('display_order', { ascending: true })
+
+  if (categoryError) {
+    throw new Error(categoryError.message)
+  }
+
+  const categories = (categoryRows ?? []).map(toCategory)
+
+  const { data: itemRows, error: itemError } = await supabase
+    .from('menu_items')
+    .select(
+      `
+        id,
+        restaurant_id,
+        category_id,
+        name,
+        description,
+        price,
+        image_url,
+        emoji,
+        is_available,
+        is_popular,
+        is_new,
+        needs_review,
+        display_order,
+        modifier_groups(
+          id,
+          item_id,
+          name,
+          selection_type,
+          is_required,
+          min_selections,
+          max_selections,
+          display_order,
+          modifiers(
+            id,
+            group_id,
+            name,
+            price_delta,
+            is_available,
+            display_order,
+            emoji
+          )
+        )
+      `
+    )
+    .eq('restaurant_id', restaurant.id)
+    .eq('is_available', true)
+    .order('display_order', { ascending: true })
+
+  if (itemError) {
+    throw new Error(itemError.message)
+  }
+
+  const menuItems = (itemRows ?? []).map(toMenuItem)
+  const modifierGroupsByItem: Record<string, ModifierGroup[]> = {}
+  const modifiersByGroup: Record<string, Modifier[]> = {}
+
+  for (const itemRow of itemRows ?? []) {
+    const groupRows = Array.isArray(itemRow.modifier_groups) ? itemRow.modifier_groups : []
+    for (const groupRow of groupRows) {
+      const group = toModifierGroup(groupRow)
+      if (!modifierGroupsByItem[group.item_id]) {
+        modifierGroupsByItem[group.item_id] = []
       }
-    )
+      modifierGroupsByItem[group.item_id].push(group)
 
-    Object.values(sectionRefs.current).forEach((el) => {
-      if (el) observer.observe(el)
-    })
-
-    return () => observer.disconnect()
-  }, [filteredItems, isScrollingFromClick])
-
-  // Handle sidebar category click
-  const handleCategoryClick = useCallback((categoryId: string) => {
-    setActiveCategory(categoryId)
-    setIsScrollingFromClick(true)
-
-    const el = sectionRefs.current[categoryId]
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      const modifierRows = Array.isArray(groupRow.modifiers) ? groupRow.modifiers : []
+      const mappedModifiers = modifierRows.map(toModifier).filter((modifier) => modifier.is_available)
+      if (mappedModifiers.length > 0) {
+        modifiersByGroup[group.id] = mappedModifiers
+      }
     }
+  }
 
-    setTimeout(() => setIsScrollingFromClick(false), 800)
-  }, [])
+  const initialData: InitialMenuData = {
+    restaurant,
+    table,
+    categories,
+    menuItems,
+    modifierGroupsByItem,
+    modifiersByGroup,
+  }
 
-  // Handle add to cart (no modifiers)
-  const handleAddSimple = useCallback(
-    (item: MenuItem) => {
-      cart.addItem({
-        menuItemId: item.id,
-        name: item.name,
-        price: item.price,
-        emoji: item.emoji,
-        selectedModifiers: [],
-      })
-      setBounceKey((k) => k + 1)
-      toast.success(`${item.name} added`, { duration: 1500 })
-    },
-    [cart]
-  )
-
-  // Handle add to cart from detail sheet (with modifiers)
-  const handleAddWithModifiers = useCallback(
-    (item: MenuItem, selectedMods: SelectedModifier[], quantity: number) => {
-      cart.addItem({
-        menuItemId: item.id,
-        name: item.name,
-        price: item.price,
-        emoji: item.emoji,
-        selectedModifiers: selectedMods,
-        quantity,
-      })
-      setBounceKey((k) => k + 1)
-      toast.success(`${item.name} added`, { duration: 1500 })
-    },
-    [cart]
-  )
-
-  // Handle place order
-  const handlePlaceOrder = useCallback(() => {
-    const items = [...cart.items]
-    const total = cart.getTotal()
-    const ticket = String(Math.floor(Math.random() * 900) + 100)
-
-    setConfirmedItems(items)
-    setConfirmedTotal(total)
-    setTicketNumber(ticket)
-    setCartOpen(false)
-    cart.clearCart()
-    setConfirmed(true)
-  }, [cart])
-
-  // Handle order more
-  const handleOrderMore = useCallback(() => {
-    setConfirmed(false)
-  }, [])
-
-  // Visible categories (those with items after filter)
-  const visibleCategories = categories.filter(
-    (cat) => (itemsByCategory[cat.id] || []).length > 0
-  )
-
-  return (
-    <div className="flex flex-col h-screen">
-      <MenuHeader
-        restaurantName={restaurant.name}
-        tableId={tableId}
-        searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
-      />
-
-      <div className="flex flex-1 overflow-hidden">
-        <CategorySidebar
-          categories={visibleCategories}
-          activeCategory={activeCategory}
-          onCategoryClick={handleCategoryClick}
-        />
-
-        {/* Scrollable content */}
-        <div
-          ref={scrollContainerRef}
-          className="flex-1 overflow-y-auto pb-24"
-        >
-          {visibleCategories.map((cat) => {
-            const items = itemsByCategory[cat.id] || []
-            if (items.length === 0) return null
-            return (
-              <div
-                key={cat.id}
-                ref={(el) => {
-                  sectionRefs.current[cat.id] = el
-                }}
-                data-category-id={cat.id}
-              >
-                {/* Sticky category label */}
-                <div className="sticky top-0 z-10 bg-bg/95 backdrop-blur-sm px-3 py-2 border-b border-border">
-                  <h2 className="text-[13px] font-semibold text-ink uppercase tracking-wider">
-                    {cat.name}
-                  </h2>
-                </div>
-
-                {/* Items */}
-                {items.map((item) => (
-                  <MenuItemCard
-                    key={item.id}
-                    item={item}
-                    hasModifiers={hasModifiers(item.id)}
-                    onAdd={handleAddSimple}
-                    onOpenDetail={setSelectedItem}
-                  />
-                ))}
-              </div>
-            )
-          })}
-
-          {/* Empty state */}
-          {visibleCategories.length === 0 && searchQuery && (
-            <div className="flex flex-col items-center justify-center py-20 px-6 text-center">
-              <span className="text-[40px] mb-3">🔍</span>
-              <p className="text-[15px] font-medium text-ink">No items found</p>
-              <p className="text-[13px] text-muted mt-1">
-                Try a different search term
-              </p>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Floating cart bar */}
-      <FloatingCartBar
-        count={cart.getCount()}
-        total={cart.getTotal()}
-        onOpen={() => setCartOpen(true)}
-        bounceKey={bounceKey}
-      />
-
-      {/* Item detail sheet */}
-      <AnimatePresence>
-        {selectedItem && (
-          <ItemDetailSheet
-            item={selectedItem}
-            modifierGroups={getModifierGroups(selectedItem.id)}
-            modifiers={mockModifiers}
-            onClose={() => setSelectedItem(null)}
-            onAddToCart={handleAddWithModifiers}
-          />
-        )}
-      </AnimatePresence>
-
-      {/* Cart sheet */}
-      <AnimatePresence>
-        {cartOpen && (
-          <CartSheet
-            items={cart.items}
-            tableId={tableId}
-            subtotal={cart.getTotal()}
-            specialInstructions={cart.specialInstructions}
-            onUpdateQuantity={cart.updateQuantity}
-            onSetInstructions={cart.setInstructions}
-            onPlaceOrder={handlePlaceOrder}
-            onClose={() => setCartOpen(false)}
-          />
-        )}
-      </AnimatePresence>
-
-      {/* Order confirmation */}
-      <AnimatePresence>
-        {confirmed && (
-          <OrderConfirmation
-            ticketNumber={ticketNumber}
-            items={confirmedItems}
-            total={confirmedTotal}
-            onOrderMore={handleOrderMore}
-          />
-        )}
-      </AnimatePresence>
-    </div>
-  )
+  return <MenuTableClientPage initialData={initialData} />
 }

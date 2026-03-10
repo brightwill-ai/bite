@@ -1,21 +1,23 @@
 'use client'
 
+import { useEffect, useMemo, useState } from 'react'
+import type { ElementType } from 'react'
 import { motion } from 'framer-motion'
+import type { QueryData } from '@supabase/supabase-js'
 import { DollarSign, ShoppingBag, Armchair, TrendingUp } from 'lucide-react'
 import { PageHeader } from '@/components/PageHeader'
+import { createClient } from '@/lib/supabase/client'
+import { useAuthStore } from '@/store/auth'
 import type { OrderStatus } from '@bite/types'
 
-const stats = [
-  { label: "Today's Revenue", value: '$1,840', icon: DollarSign, change: '+12%' },
-  { label: 'Orders Today', value: '47', icon: ShoppingBag, change: '+8%' },
-  { label: 'Active Tables', value: '8/15', icon: Armchair, change: '' },
-  { label: 'Avg Order Size', value: '$39.15', icon: TrendingUp, change: '+3%' },
-]
+interface StatItem {
+  label: string
+  value: string
+  icon: ElementType
+  change: string
+}
 
-const activeTables = [1, 2, 3, 5, 7, 9, 11, 14]
-const allTables = Array.from({ length: 15 }, (_, i) => i + 1)
-
-const recentOrders: {
+interface RecentOrder {
   id: string
   ticket: string
   table: string
@@ -23,13 +25,31 @@ const recentOrders: {
   total: string
   status: OrderStatus
   time: string
-}[] = [
-  { id: '1', ticket: '#047', table: 'T-3', items: 'Margherita, Truffle Fries', total: '$27.00', status: 'preparing', time: '2 min ago' },
-  { id: '2', ticket: '#046', table: 'T-7', items: 'Grilled Ribeye, House Red Wine', total: '$52.00', status: 'confirmed', time: '5 min ago' },
-  { id: '3', ticket: '#045', table: 'T-1', items: 'Cacio e Pepe, Tiramisu, Espresso', total: '$37.50', status: 'ready', time: '8 min ago' },
-  { id: '4', ticket: '#044', table: 'T-11', items: 'Pan-Seared Salmon, Sparkling Water', total: '$35.00', status: 'delivered', time: '15 min ago' },
-  { id: '5', ticket: '#043', table: 'T-5', items: 'Burrata & Heirloom Tomato, Pepperoni', total: '$36.50', status: 'delivered', time: '22 min ago' },
-]
+}
+
+function formatRelativeTime(iso: string | null): string {
+  if (!iso) {
+    return 'just now'
+  }
+  const diffMs = Date.now() - new Date(iso).getTime()
+  const diffMinutes = Math.max(1, Math.floor(diffMs / 60000))
+  if (diffMinutes < 60) {
+    return `${diffMinutes}m`
+  }
+  const diffHours = Math.floor(diffMinutes / 60)
+  if (diffHours < 24) {
+    return `${diffHours}h`
+  }
+  const diffDays = Math.floor(diffHours / 24)
+  return `${diffDays}d`
+}
+
+function normalizeStatus(value: string): OrderStatus {
+  if (value === 'confirmed' || value === 'preparing' || value === 'ready' || value === 'delivered') {
+    return value
+  }
+  return 'pending'
+}
 
 function StatusBadge({ status }: { status: OrderStatus }) {
   const styles: Record<OrderStatus, string> = {
@@ -48,20 +68,163 @@ function StatusBadge({ status }: { status: OrderStatus }) {
 }
 
 export default function DashboardPage() {
+  const supabase = useMemo(() => createClient(), [])
+  const restaurantId = useAuthStore((state) => state.restaurant?.id ?? null)
+
+  const [stats, setStats] = useState<StatItem[]>([
+    { label: "Today's Revenue", value: '$0.00', icon: DollarSign, change: '' },
+    { label: 'Orders Today', value: '0', icon: ShoppingBag, change: '' },
+    { label: 'Active Tables', value: '0/0', icon: Armchair, change: '' },
+    { label: 'Avg Order Size', value: '$0.00', icon: TrendingUp, change: '' },
+  ])
+  const [recentOrders, setRecentOrders] = useState<RecentOrder[]>([])
+  const [allTables, setAllTables] = useState<number[]>([])
+  const [activeTables, setActiveTables] = useState<number[]>([])
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    const loadDashboard = async () => {
+      if (!restaurantId) {
+        return
+      }
+      setLoading(true)
+
+      const startOfDay = new Date()
+      startOfDay.setHours(0, 0, 0, 0)
+
+      const [ordersResult, tablesResult] = await Promise.all([
+        supabase
+          .from('orders')
+          .select(
+            `
+              id,
+              table_id,
+              ticket_number,
+              status,
+              total,
+              table:tables(table_number, label),
+              created_at,
+              order_items(item_name, quantity)
+            `
+          )
+          .eq('restaurant_id', restaurantId)
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('tables')
+          .select('id, table_number, is_active')
+          .eq('restaurant_id', restaurantId)
+          .order('table_number', { ascending: true }),
+      ])
+
+      const allOrders = ordersResult.data ?? []
+      const todayOrders = allOrders.filter((order) => {
+        if (!order.created_at) {
+          return false
+        }
+        return new Date(order.created_at) >= startOfDay
+      })
+
+      const todayRevenue = todayOrders.reduce((sum, order) => sum + (order.total ?? 0), 0)
+      const avgOrder = todayOrders.length > 0 ? todayRevenue / todayOrders.length : 0
+
+      const tableRows = tablesResult.data ?? []
+      const tableNumberById = new Map(
+        tableRows.map((table) => [table.id, Number.parseInt(table.table_number, 10)])
+      )
+      const tableNumbers = tableRows
+        .map((table) => Number.parseInt(table.table_number, 10))
+        .filter((value) => Number.isFinite(value))
+
+      const activeOrderStatuses = new Set(['pending', 'confirmed', 'preparing', 'ready'])
+      const enabledTables = Array.from(
+        new Set(
+          allOrders
+            .filter((order) => activeOrderStatuses.has(order.status))
+            .map((order) => tableNumberById.get(order.table_id))
+            .filter((value): value is number => Number.isFinite(value))
+        )
+      )
+
+      setAllTables(tableNumbers)
+      setActiveTables(enabledTables)
+
+      setStats([
+        {
+          label: "Today's Revenue",
+          value: `$${todayRevenue.toFixed(2)}`,
+          icon: DollarSign,
+          change: '',
+        },
+        {
+          label: 'Orders Today',
+          value: String(todayOrders.length),
+          icon: ShoppingBag,
+          change: '',
+        },
+        {
+          label: 'Active Tables',
+          value: `${enabledTables.length}/${tableRows.length}`,
+          icon: Armchair,
+          change: '',
+        },
+        {
+          label: 'Avg Order Size',
+          value: `$${avgOrder.toFixed(2)}`,
+          icon: TrendingUp,
+          change: '',
+        },
+      ])
+
+      const query = supabase
+        .from('orders')
+        .select(
+          `
+            id,
+            ticket_number,
+            status,
+            total,
+            created_at,
+            table:tables(table_number, label),
+            order_items(item_name, quantity)
+          `
+        )
+        .eq('restaurant_id', restaurantId)
+        .order('created_at', { ascending: false })
+        .limit(5)
+
+      type RecentOrderRow = QueryData<typeof query>[number]
+      const { data: recentRows } = await query
+      const normalizedRecent: RecentOrder[] = (recentRows ?? []).map((order: RecentOrderRow) => ({
+        id: order.id,
+        ticket: `#${String(order.ticket_number).padStart(3, '0')}`,
+        table: `T-${order.table?.label ?? order.table?.table_number ?? '?'}`,
+        items: (order.order_items ?? [])
+          .map((item) => `${item.quantity}x ${item.item_name}`)
+          .join(', '),
+        total: `$${(order.total ?? 0).toFixed(2)}`,
+        status: normalizeStatus(order.status),
+        time: formatRelativeTime(order.created_at),
+      }))
+      setRecentOrders(normalizedRecent)
+      setLoading(false)
+    }
+
+    void loadDashboard()
+  }, [restaurantId, supabase])
+
   return (
     <div className="space-y-6">
       <PageHeader title="Dashboard" description="Overview of today's activity" />
 
-      {/* Stats Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {stats.map((stat, i) => {
+        {stats.map((stat, index) => {
           const Icon = stat.icon
           return (
             <motion.div
               key={stat.label}
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.08, duration: 0.35 }}
+              transition={{ delay: index * 0.08, duration: 0.35 }}
               className="bg-surface2 border border-border rounded p-5"
             >
               <div className="flex items-center justify-between mb-3">
@@ -80,7 +243,6 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Active Tables */}
         <div className="bg-surface2 border border-border rounded p-5">
           <h2 className="font-display font-bold text-lg text-ink mb-4">Active Tables</h2>
           <div className="grid grid-cols-5 gap-2">
@@ -99,10 +261,12 @@ export default function DashboardPage() {
                 </div>
               )
             })}
+            {!loading && allTables.length === 0 && (
+              <p className="text-xs text-muted col-span-5">No tables configured yet.</p>
+            )}
           </div>
         </div>
 
-        {/* Recent Orders */}
         <div className="lg:col-span-2 bg-surface2 border border-border rounded p-5">
           <h2 className="font-display font-bold text-lg text-ink mb-4">Recent Orders</h2>
           <div className="space-y-3">
@@ -125,6 +289,9 @@ export default function DashboardPage() {
                 </div>
               </div>
             ))}
+            {!loading && recentOrders.length === 0 && (
+              <p className="text-sm text-muted">No recent orders yet.</p>
+            )}
           </div>
         </div>
       </div>

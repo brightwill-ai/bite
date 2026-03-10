@@ -10,6 +10,10 @@ const config: Config = {
   theme: {
     extend: {
       ...sharedConfig.theme.extend,
+      fontFamily: {
+        ...sharedConfig.theme.extend.fontFamily,
+        display: ['var(--font-fraunces)', 'serif'],
+      },
     },
   },
   plugins: [],

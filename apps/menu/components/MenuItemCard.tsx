@@ -39,7 +39,8 @@ export default function MenuItemCard({ item, hasModifiers, onAdd, onOpenDetail }
       )}
     >
       <button
-        onClick={() => item.is_available && hasModifiers && onOpenDetail(item)}
+        onClick={() => item.is_available && onOpenDetail(item)}
+        aria-label={`View details for ${item.name}`}
         className="w-[84px] h-[84px] rounded-[8px] bg-surface flex items-center justify-center flex-shrink-0 text-[40px]"
       >
         {item.emoji || '🍽️'}

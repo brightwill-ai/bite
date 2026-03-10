@@ -34,6 +34,8 @@ export default function CategorySidebar({
             <button
               key={cat.id}
               onClick={() => onCategoryClick(cat.id)}
+              aria-pressed={isActive}
+              aria-label={cat.name}
               className={cn(
                 'w-full py-3 px-1 flex flex-col items-center gap-1 text-center transition-colors relative',
                 isActive

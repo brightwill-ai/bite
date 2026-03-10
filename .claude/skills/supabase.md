@@ -1,292 +1,138 @@
-# Skill: Supabase Integration (Phase 2)
+# Skill: Supabase Integration (Phase 2+)
 
-⚠️ This skill is for Phase 2. Do not implement anything in this file during Phase 1 (frontend MVP).
+Use this skill when touching auth, database access, storage uploads, Edge Functions, or migrations.
 
-When Phase 2 begins, this file will be the guide for wiring up Supabase. It is here now so the patterns are documented before implementation starts.
+## Current State
 
----
+Supabase is live for Phase 2.
 
-## Overview
+- Project ref: `ltswdtctfrelzomozmme`
+- MCP config: `.claude/settings.json`
+- Migrations: `supabase/migrations/`
+- Edge Functions:
+  - `parse-menu`
+  - `trigger-print`
 
-Supabase replaces all mock data and localStorage persistence. The component interfaces stay the same — only the data sources change.
+## Client Patterns
 
-```
-Phase 1:  mockItems → component
-Phase 2:  Supabase query → same component (no component changes)
-```
+Use app-local helpers:
 
----
+- `apps/menu/lib/supabase/client.ts`
+- `apps/menu/lib/supabase/server.ts`
+- `apps/admin/lib/supabase/client.ts`
+- `apps/admin/lib/supabase/server.ts`
 
-## What Supabase Handles
+Always use the typed `Database` model from `@bite/types/supabase`.
 
-| Feature | Supabase Service |
-|---|---|
-| All data storage | PostgreSQL |
-| Auth (admin login) | Supabase Auth |
-| Live order updates to KDS | Realtime |
-| Menu PDF + food images | Storage |
-| Menu parser, print trigger | Edge Functions |
+## Runtime Data Rules
 
----
+- `apps/menu` and `apps/admin` should query Supabase, not `@bite/types/mock`.
+- Keep component prop shapes stable; swap data source in stores/pages, not in UI contracts.
+- Prefer server fetch for read-heavy route initialization and client fetch for interactive mutations.
 
-## Setup (When Starting Phase 2)
+## Auth Rules
 
-```bash
-# Install in both apps/menu and apps/admin
-npm install @supabase/supabase-js @supabase/ssr --workspace=apps/menu
-npm install @supabase/supabase-js @supabase/ssr --workspace=apps/admin
-```
+- Admin auth is Supabase Auth (`signInWithPassword`, `signUp`, `signOut`).
+- Admin route protection uses `apps/admin/middleware.ts`.
+- On first login without a staff row, route users to onboarding and create restaurant + owner staff row.
 
-Add to `.env.local` in each app:
-```
-NEXT_PUBLIC_SUPABASE_URL=https://[project].supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=[anon-key]
-```
+## Migrations
 
----
+- Put schema and policy changes in `supabase/migrations/<timestamp>_<name>.sql`.
+- Do not run DDL directly through ad-hoc SQL without adding a migration file.
+- Keep migration filenames aligned with applied versions.
 
-## Client Setup
+Current baseline migrations:
 
-`apps/[app]/lib/supabase/client.ts` — browser client:
-```typescript
-import { createBrowserClient } from '@supabase/ssr'
+- `20260310044417_create_base_schema.sql`
+- `20260310044458_create_rls_policies.sql`
+- `20260310044502_create_storage_buckets.sql`
+- `20260310054023_harden_order_ticketing_and_timestamps.sql`
+- `20260310054123_seed_the_oakwood_demo_restaurant.sql`
+- `20260310060639_harden_order_rls_and_functions.sql`
+- `20260310060747_optimize_rls_policies.sql`
+- `20260310060819_optimize_session_header_policies.sql`
+- `20260310061148_fix_order_insert_policies_for_anon.sql`
+- `20260310061527_secure_create_order_rpc.sql`
+- `20260310064129_add_order_insert_print_webhook.sql`
+- `20260310064809_fix_print_webhook_net_signature.sql`
+- `20260310065943_expand_the_oakwood_seed_data.sql`
+- `20260310135135_fix_staff_policy_recursion.sql`
 
-export function createClient() {
-  return createBrowserClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  )
-}
-```
+## RLS Expectations
 
-`apps/[app]/lib/supabase/server.ts` — server component client:
-```typescript
-import { createServerClient } from '@supabase/ssr'
-import { cookies } from 'next/headers'
+All 11 public tables have RLS enabled.
 
-export function createServerClient() {
-  const cookieStore = cookies()
-  return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        get(name: string) { return cookieStore.get(name)?.value },
-      },
-    }
-  )
-}
-```
+- Public read for customer-safe menu/table data.
+- Staff-scoped write/read by `restaurant_id`.
+- Customer order reads scoped by `x-session-id` header.
+- `staff` owner/manager checks must use SECURITY DEFINER helpers (not direct self-query subselects inside `staff` policies) to avoid infinite recursion.
 
----
+If you add a table, add:
 
-## Swapping Mock Data → Supabase
-
-### Menu app (customer-facing)
-
-The menu page becomes a Server Component that fetches at request time:
-
-```typescript
-// Before (Phase 1 — mock)
-import { mockRestaurant, mockCategories, mockItems } from '@bite/types/mock'
-
-// After (Phase 2 — Supabase)
-const supabase = createServerClient()
-
-const { data: restaurant } = await supabase
-  .from('restaurants')
-  .select('*')
-  .eq('slug', params.slug)
-  .single()
-
-const { data: categories } = await supabase
-  .from('menu_categories')
-  .select(`
-    *,
-    menu_items (
-      *,
-      modifier_groups (
-        *,
-        modifiers (*)
-      )
-    )
-  `)
-  .eq('restaurant_id', restaurant.id)
-  .eq('is_available', true)
-  .order('display_order')
-```
-
-### Admin store (replace localStorage with Supabase)
-
-Replace `persist` middleware with Supabase queries:
-
-```typescript
-// Before (Phase 1 — localStorage persist)
-export const useMenuStore = create<MenuStore>()(
-  persist(
-    (set) => ({
-      items: mockItems,
-      updateItem: (id, updates) => set(state => ({ ... })),
-    }),
-    { name: 'bite-menu-store' }
-  )
-)
-
-// After (Phase 2 — Supabase)
-export const useMenuStore = create<MenuStore>()((set) => ({
-  items: [],
-
-  loadItems: async (restaurantId: string) => {
-    const supabase = createClient()
-    const { data } = await supabase
-      .from('menu_items')
-      .select('*')
-      .eq('restaurant_id', restaurantId)
-      .order('display_order')
-    if (data) set({ items: data })
-  },
-
-  updateItem: async (id, updates) => {
-    const supabase = createClient()
-    await supabase.from('menu_items').update(updates).eq('id', id)
-    set(state => ({
-      items: state.items.map(i => i.id === id ? { ...i, ...updates } : i)
-    }))
-  },
-}))
-```
-
----
-
-## RLS Policies Needed
-
-Every table needs Row Level Security enabled. Key policies:
-
-```sql
--- Anyone can read menu items (customers browsing)
-CREATE POLICY "Public read menu items"
-ON menu_items FOR SELECT
-USING (true);
-
--- Only authenticated staff can modify their restaurant's data
-CREATE POLICY "Staff manage own items"
-ON menu_items FOR ALL
-USING (
-  restaurant_id IN (
-    SELECT restaurant_id FROM staff WHERE id = auth.uid()
-  )
-);
-
--- Orders readable by restaurant staff
-CREATE POLICY "Staff read own orders"
-ON orders FOR SELECT
-USING (
-  restaurant_id IN (
-    SELECT restaurant_id FROM staff WHERE id = auth.uid()
-  )
-);
-```
-
----
-
-## Realtime (Orders → KDS)
-
-When Phase 3 adds the Kitchen Display System:
-
-```typescript
-// Subscribe to new orders for a restaurant
-const supabase = createClient()
-
-const channel = supabase
-  .channel('orders')
-  .on(
-    'postgres_changes',
-    {
-      event: 'INSERT',
-      schema: 'public',
-      table: 'orders',
-      filter: `restaurant_id=eq.${restaurantId}`,
-    },
-    (payload) => {
-      // New order arrived — update KDS
-      addNewTicket(payload.new as Order)
-      playChime()
-    }
-  )
-  .subscribe()
-
-// Cleanup
-return () => supabase.removeChannel(channel)
-```
-
----
+1. RLS enable statement
+2. Policies
+3. Any helper function updates
 
 ## Edge Functions
 
-Two Edge Functions needed in Phase 2:
+### `parse-menu`
 
-**`supabase/functions/parse-menu/`** — Called from admin upload page
-- Receives extracted PDF text
-- Calls Claude API to parse into JSON menu structure
-- Returns categories + items JSON
+- Input: upload metadata + extracted menu text
+- Downloads files from the private `menu-uploads` storage bucket
+- Extracts PDF text (with fallback decode for non-PDF files)
+- Admin upload page treats local `/api/extract-pdf` errors as non-fatal and falls back to server-side extraction in this Edge Function
+- Parser strategy:
+  - deterministic text/PDF parser first (no LLM needed when confidence is high)
+  - vision parse for image uploads
+  - LLM fallback (Claude-first with OpenAI fallback) when deterministic confidence is low or vision is required
+- Updates `menu_uploads.status`, `parsed_data`, and `error_message`
 
-**`supabase/functions/trigger-print/`** — Database webhook on `orders` INSERT
-- Fetches full order details
-- Formats printer ticket
-- Calls PrintNode API
+Required secret (at least one):
 
-Deploy:
-```bash
-supabase functions deploy parse-menu
-supabase functions deploy trigger-print
-```
+- `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`
 
----
+### `trigger-print`
 
-## Auth Migration (Phase 2)
+- Modes:
+  - `test` (admin settings test print)
+  - `order` (print kitchen ticket for an order)
+- Uses restaurant PrintNode credentials from DB
+- Updates `orders.print_status` to `sent`/`failed`
 
-Replace mock auth store with Supabase Auth:
+Optional secret:
 
-```typescript
-// Login
-const { data, error } = await supabase.auth.signInWithPassword({
-  email,
-  password,
-})
+- `PRINT_WEBHOOK_SECRET`
 
-// Logout
-await supabase.auth.signOut()
+## Storage
 
-// Get current user (server component)
-const { data: { user } } = await supabase.auth.getUser()
-```
+Buckets:
 
-Protect routes with `middleware.ts`:
-```typescript
-import { createServerClient } from '@supabase/ssr'
-import { NextResponse } from 'next/server'
+- `qr-codes` (public)
+- `menu-uploads` (private)
+- `menu-images` (public)
 
-export async function middleware(request: NextRequest) {
-  const supabase = createServerClient(...)
-  const { data: { session } } = await supabase.auth.getSession()
+Keep bucket policy changes in migrations.
 
-  if (!session && request.nextUrl.pathname.startsWith('/dashboard')) {
-    return NextResponse.redirect(new URL('/login', request.url))
-  }
-}
+## Deployment / Env
 
-export const config = {
-  matcher: ['/dashboard/:path*'],
-}
-```
+Required env vars:
 
----
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY` (admin and functions)
 
-## After You're Done
+Required GitHub secrets:
 
-**You must update documentation before the task is complete.** After making any changes related to this skill area, update:
-1. **`CLAUDE.md`** — if the change affects structure, patterns, or conventions described there
-2. **`README.md`** — if the change affects project structure, setup, or developer-facing info
-3. **This skill file** — if the change introduces new patterns, changes existing ones, or makes any part of this file outdated
+- `SUPABASE_URL`
+- `SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- Bootstrap script: `.github/scripts/set-supabase-secrets.sh` (uses `GH_TOKEN`/`GITHUB_TOKEN` or git credential helper; sets whichever `SUPABASE_*` vars are exported)
 
-Documentation updates are part of the task, not a follow-up.
+## When Changing This Area
+
+Update these docs in the same task:
+
+1. `AGENTS.md`
+2. `README.md`
+3. This skill file

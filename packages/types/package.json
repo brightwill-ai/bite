@@ -6,6 +6,7 @@
   "types": "./index.ts",
   "exports": {
     ".": "./index.ts",
-    "./mock": "./mock.ts"
+    "./mock": "./mock.ts",
+    "./supabase": "./supabase.ts"
   }
 }
