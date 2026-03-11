@@ -294,7 +294,10 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       return { success: false, error: 'A valid restaurant slug is required.' }
     }
 
-    const restaurantId = window.crypto.randomUUID()
+    const restaurantId =
+      typeof window.crypto.randomUUID === 'function'
+        ? window.crypto.randomUUID()
+        : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`
 
     const { error: restaurantError } = await supabase
       .from('restaurants')

@@ -18,11 +18,16 @@ export default function LoginPage() {
     setError('')
     setLoading(true)
 
-    const result = await login(email, password)
-    if (result.success) {
-      router.push('/dashboard')
-    } else {
-      setError(result.error || 'Login failed')
+    try {
+      const result = await login(email, password)
+      if (result.success) {
+        router.push('/dashboard')
+      } else {
+        setError(result.error || 'Login failed')
+        setLoading(false)
+      }
+    } catch {
+      setError('An unexpected error occurred. Please try again.')
       setLoading(false)
     }
   }

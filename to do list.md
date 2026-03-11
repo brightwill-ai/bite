@@ -111,3 +111,80 @@ Order of Implementation
 Realtime orders (self-contained, no new deps)
 Batch QR download (install jszip first)
 Daily summary edge function + migration
+
+What's Complete
+All frontend (Phase 1) ✓
+Supabase auth + RLS + 11-table schema ✓
+Order creation flow (customer → DB) ✓
+Menu parser (Claude API + PDF/image OCR) ✓
+PrintNode webhook trigger on order insert ✓
+QR code generation per table ✓
+Staff invite API ✓
+Admin onboarding wizard ✓
+What You Still Need (Prioritized)
+P0 — Hard Blockers (App won't work without these)
+1. Realtime Order Subscriptions
+The orders page currently does a one-time fetch. Kitchen staff would need to manually refresh to see new orders — unusable in a real restaurant. Need to add a Supabase Realtime channel subscription in apps/admin/app/(dashboard)/orders/page.tsx. The spec is already written in to do list.md.
+
+2. Production Hosting & Domains
+Docker + Nginx config exists but isn't deployed anywhere. You need:
+
+A server (VPS, Railway, Fly.io, etc.) running the three Next.js apps
+bite.so, menu.bite.so, admin.bite.so pointed to it with SSL
+NEXT_PUBLIC_MENU_BASE_URL set to the real menu.bite.so URL (QR codes embed this URL — if it's wrong, every QR code is broken)
+3. Supabase Production Secrets
+The edge functions need secrets deployed to Supabase:
+
+ANTHROPIC_API_KEY → for menu parsing
+PRINT_WEBHOOK_SECRET → for PrintNode webhook security
+RESEND_API_KEY → for staff invites and daily summary emails
+4. Email Provider (Resend)
+Staff invite emails and daily summary emails both use Resend. Without a real API key and a verified sending domain, inviting staff doesn't work.
+
+P1 — Core Operations (Restaurant can't run efficiently without these)
+5. Adyen Payments (you know this one)
+Currently no payment flow at all — customers order for free. Need Adyen for Platforms sub-merchant onboarding + payment step in the customer cart before order submission.
+
+6. Kitchen Printer Connection (you know this one)
+The trigger-print edge function is built. But restaurants need to:
+
+Sign up for PrintNode and get an API key
+Install PrintNode client on a computer connected to their thermal printer
+Enter their API key + printer ID in admin Settings → test print to verify
+7. Kitchen Display System (KDS)
+If a restaurant doesn't have a printer, they need a screen showing incoming orders. Currently there's no KDS view. This could be as simple as a second tab on the orders page (fullscreen, auto-refreshing) or a dedicated /kitchen route. Without either a printer OR a KDS, kitchen staff have no reliable way to see orders.
+
+8. Daily Summary Cron
+The edge function and migration file are both written. Just needs:
+
+Enable pg_cron + pg_net extensions in Supabase dashboard
+Run the migration: supabase/migrations/20260311000000_pg_cron_daily_summary.sql
+Set RESEND_API_KEY secret (same as #4)
+P2 — Quality / Ops Completeness
+9. Batch QR Download
+The to do list.md has this partially implemented but not wired up. JSZip is already installed. Restaurants need to print QR codes for all their tables at once — downloading 20 individual PNGs is painful.
+
+10. Menu Item Images
+The menu-images storage bucket exists and is public, but there's no UI to upload images per menu item. Items currently use emoji only. Not a blocker, but restaurants will ask for it.
+
+11. Customer Order Status Tracking
+After placing an order, customers see an "Order Confirmed" screen but get no further updates. No way to know when food is ready. A simple polling or Realtime subscription on the order's status field in the menu app would let you show "Your order is being prepared" / "Ready for pickup."
+
+12. Error Monitoring
+Nothing catches production errors right now. At minimum, add Sentry to the admin and menu apps so you know when something breaks in a live restaurant without a customer having to tell you.
+
+13. End-to-End Smoke Test Before Each Restaurant Onboarding
+The full path — signup → create tables → upload menu → scan QR → add to cart → checkout → order appears in admin → prints — needs to work reliably. There are no automated tests. Before handing off to a restaurant, run this manually in production.
+
+Recommended Order
+1. Set up hosting + real domains + env vars        (unlocks everything)
+2. Set up Resend + deploy secrets to Supabase      (email works)
+3. Implement Realtime orders subscription          (operations work)
+4. Verify PrintNode end-to-end with a real printer (kitchen works)
+5. Complete batch QR download                      (onboarding smooth)
+6. Enable pg_cron + run daily-summary migration    (quick win, fully coded)
+7. KDS view                                        (printer alternative)
+8. Customer order status updates                   (experience polish)
+9. Adyen payments                                  (revenue)
+10. Menu item images                               (nice-to-have)
+11. Error monitoring                               (production safety net)
