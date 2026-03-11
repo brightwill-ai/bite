@@ -85,7 +85,10 @@ function getSessionId(restaurantId: string, tableId: string): string {
     return existing
   }
 
-  const created = window.crypto.randomUUID()
+  const created =
+    typeof window.crypto.randomUUID === 'function'
+      ? window.crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`
   window.sessionStorage.setItem(key, created)
   return created
 }
