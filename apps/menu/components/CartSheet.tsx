@@ -1,8 +1,10 @@
 'use client'
 
+import { useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { X, Plus, Minus } from 'lucide-react'
 import type { CartItem, SelectedModifier } from '@bite/types'
+import { normalizeMenuEmoji } from '@/lib/emoji'
 import { cn } from '@/lib/utils'
 
 interface CartSheetProps {
@@ -32,6 +34,15 @@ export default function CartSheet({
   onPlaceOrder,
   onClose,
 }: CartSheetProps) {
+  // Close on Escape key
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onClose])
+
   return (
     <motion.div
       className="fixed inset-0 z-50 flex items-end justify-center"
@@ -42,6 +53,7 @@ export default function CartSheet({
       {/* Backdrop */}
       <motion.div
         className="absolute inset-0 bg-black/50"
+        aria-hidden="true"
         onClick={onClose}
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -50,6 +62,9 @@ export default function CartSheet({
 
       {/* Sheet */}
       <motion.div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="cart-sheet-title"
         className="relative w-full max-w-[430px] max-h-[85vh] bg-surface2 rounded-t-[20px] overflow-hidden flex flex-col"
         initial={{ y: '100%' }}
         animate={{ y: 0 }}
@@ -70,13 +85,14 @@ export default function CartSheet({
         {/* Header */}
         <div className="flex items-center justify-between px-4 pb-3">
           <div className="flex items-center gap-3">
-            <h2 className="font-display text-[20px] font-bold text-ink">Your Order</h2>
+            <h2 id="cart-sheet-title" className="font-display text-[20px] font-bold text-ink">Your Order</h2>
             <div className="bg-ink text-surface text-[11px] font-medium px-2.5 py-0.5 rounded-full">
               Table {tableId}
             </div>
           </div>
           <button
             onClick={onClose}
+            aria-label="Close"
             className="w-8 h-8 rounded-full bg-bg flex items-center justify-center"
           >
             <X className="w-4 h-4 text-ink" />
@@ -93,7 +109,7 @@ export default function CartSheet({
                 <div className="flex items-start justify-between">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="text-[18px]">{item.emoji || '🍽️'}</span>
+                      <span className="text-[18px]">{normalizeMenuEmoji(item.emoji) || '🍽️'}</span>
                       <h3 className="text-[14px] font-semibold text-ink truncate">
                         {item.name}
                       </h3>

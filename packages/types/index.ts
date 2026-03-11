@@ -1,3 +1,18 @@
+// ============================================================
+// Enums / Union Types
+// ============================================================
+
+export type SubscriptionTier = 'free' | 'starter' | 'pro' | 'enterprise'
+export type PaymentStatus = 'unpaid' | 'pending' | 'paid' | 'failed' | 'refunded'
+export type PrintStatus = 'none' | 'sent' | 'failed'
+export type OrderStatus = 'pending' | 'confirmed' | 'preparing' | 'ready' | 'delivered'
+export type StaffRole = 'owner' | 'manager' | 'staff'
+export type MenuUploadStatus = 'pending' | 'processing' | 'completed' | 'failed'
+
+// ============================================================
+// Core Entities
+// ============================================================
+
 export type Restaurant = {
   id: string
   name: string
@@ -6,6 +21,24 @@ export type Restaurant = {
   cuisine_type?: string
   address?: string
   timezone?: string
+  is_active: boolean
+  subscription_tier: SubscriptionTier
+  printnode_api_key?: string
+  printnode_printer_id?: string
+  adyen_merchant_id?: string
+  created_at?: string
+  updated_at?: string
+}
+
+export type Staff = {
+  id: string
+  user_id: string
+  restaurant_id: string
+  name: string
+  email: string
+  role: StaffRole
+  created_at?: string
+  updated_at?: string
 }
 
 export type Table = {
@@ -15,7 +48,13 @@ export type Table = {
   label?: string
   qr_code_url?: string
   is_active: boolean
+  created_at?: string
+  updated_at?: string
 }
+
+// ============================================================
+// Menu
+// ============================================================
 
 export type MenuCategory = {
   id: string
@@ -62,7 +101,9 @@ export type Modifier = {
   emoji?: string
 }
 
-export type OrderStatus = 'pending' | 'confirmed' | 'preparing' | 'ready' | 'delivered'
+// ============================================================
+// Orders
+// ============================================================
 
 export type Order = {
   id: string
@@ -72,8 +113,17 @@ export type Order = {
   ticket_number: number
   status: OrderStatus
   special_instructions?: string
+  subtotal: number
+  tax: number
+  tip: number
+  total: number
+  payment_status: PaymentStatus
+  payment_intent_id?: string
+  print_status: PrintStatus
   created_at: string
+  updated_at?: string
   items?: OrderItem[]
+  table?: Table
 }
 
 export type OrderItem = {
@@ -92,6 +142,25 @@ export type SelectedModifier = {
   name: string
   price_delta: number
 }
+
+// ============================================================
+// Menu Uploads
+// ============================================================
+
+export type MenuUpload = {
+  id: string
+  restaurant_id: string
+  file_url: string
+  status: MenuUploadStatus
+  parsed_data?: unknown
+  error_message?: string
+  created_at?: string
+  updated_at?: string
+}
+
+// ============================================================
+// Cart (customer app, client-only)
+// ============================================================
 
 export type CartItem = {
   menuItemId: string

@@ -218,14 +218,25 @@ const [addCount, setAddCount] = useState(0)
 - Add `aria-hidden="true"` to backdrop overlays
 - Sheet/drawer content should be wrapped in `role="dialog"` with `aria-modal="true"`
 - Animated elements must still be keyboard navigable after animation completes
-- Respect `prefers-reduced-motion`:
+- Respect `prefers-reduced-motion`. Two approaches:
 
+**Option 1 — Page-level (preferred for whole pages/layouts):** Wrap the entire page in `MotionConfig`. All child `motion.*` components automatically skip animations if the OS setting is enabled.
+```tsx
+import { MotionConfig } from 'framer-motion'
+
+// Wrap the page root
+<MotionConfig reducedMotion="user">
+  {/* all motion components inside respect prefers-reduced-motion */}
+</MotionConfig>
+```
+
+**Option 2 — Component-level:** Use the `useReducedMotion` hook for fine-grained control.
 ```tsx
 import { useReducedMotion } from 'framer-motion'
 
 function AnimatedSheet({ ... }) {
   const shouldReduce = useReducedMotion()
-  
+
   return (
     <motion.div
       initial={{ y: shouldReduce ? 0 : '100%' }}

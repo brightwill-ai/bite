@@ -1,91 +1,457 @@
 'use client'
 
-import { useState, useCallback } from 'react'
-import { useRouter } from 'next/navigation'
+import { useCallback, useMemo, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Upload, FileText, Check, Loader2, ChevronRight, Pencil, Trash2 } from 'lucide-react'
-import { PageHeader } from '@/components/PageHeader'
-import { useMenuStore } from '@/store/menu'
 import type { MenuCategory, MenuItem } from '@bite/types'
+import { PageHeader } from '@/components/PageHeader'
+import { createClient } from '@/lib/supabase/client'
+import { useAuthStore } from '@/store/auth'
+import { useMenuStore } from '@/store/menu'
 
-const PARSED_CATEGORIES: MenuCategory[] = [
-  { id: 'p-cat-1', restaurant_id: 'rest-001', name: 'Appetizers', display_order: 1, is_available: true },
-  { id: 'p-cat-2', restaurant_id: 'rest-001', name: 'Entrees', display_order: 2, is_available: true },
-  { id: 'p-cat-3', restaurant_id: 'rest-001', name: 'Desserts', display_order: 3, is_available: true },
-]
+type ParsedCategory = {
+  name: string
+  display_order?: number
+}
 
-const PARSED_ITEMS: MenuItem[] = [
-  { id: 'p-item-1', restaurant_id: 'rest-001', category_id: 'p-cat-1', name: 'Caesar Salad', description: 'Romaine, croutons, parmesan, house dressing', price: 14, emoji: '🥗', is_available: true, is_popular: false, display_order: 1 },
-  { id: 'p-item-2', restaurant_id: 'rest-001', category_id: 'p-cat-1', name: 'Soup of the Day', description: 'Chef selection, served with bread', price: 10, emoji: '🍲', is_available: true, is_popular: false, display_order: 2 },
-  { id: 'p-item-3', restaurant_id: 'rest-001', category_id: 'p-cat-2', name: 'Grilled Chicken', description: 'Free-range chicken, seasonal vegetables, jus', price: 28, emoji: '🍗', is_available: true, is_popular: true, needs_review: true, display_order: 1 },
-  { id: 'p-item-4', restaurant_id: 'rest-001', category_id: 'p-cat-2', name: 'Pasta Primavera', description: 'Fresh pasta, market vegetables, light cream sauce', price: 22, emoji: '🍝', is_available: true, is_popular: false, display_order: 2 },
-  { id: 'p-item-5', restaurant_id: 'rest-001', category_id: 'p-cat-3', name: 'Chocolate Cake', description: 'Rich dark chocolate, berry compote, whipped cream', price: 14, emoji: '🍫', is_available: true, is_popular: true, needs_review: true, display_order: 1 },
-]
+type ParsedItem = {
+  name: string
+  description?: string
+  price: number
+  emoji?: string
+  category_name?: string
+  category_index?: number
+  is_popular?: boolean
+  is_new?: boolean
+  needs_review?: boolean
+}
+
+type ParseMenuResponse = {
+  categories: ParsedCategory[]
+  items: ParsedItem[]
+}
+
+type ParseFunctionResult = {
+  status: number
+  data: unknown | null
+  errorMessage: string | null
+}
+
+function extractFunctionErrorMessage(data: unknown, status: number): string {
+  if (
+    data &&
+    typeof data === 'object' &&
+    'error' in data &&
+    typeof data.error === 'string' &&
+    data.error.trim()
+  ) {
+    return data.error.trim()
+  }
+
+  return `Parser request failed (${status})`
+}
+
+async function invokeParseMenuFunction(params: {
+  accessToken: string
+  body: Record<string, unknown>
+}): Promise<ParseFunctionResult> {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+  if (!supabaseUrl || !anonKey) {
+    return {
+      status: 0,
+      data: null,
+      errorMessage: 'Supabase client environment is not configured.',
+    }
+  }
+
+  try {
+    const response = await fetch(`${supabaseUrl}/functions/v1/parse-menu`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: anonKey,
+        Authorization: `Bearer ${params.accessToken}`,
+      },
+      body: JSON.stringify(params.body),
+    })
+
+    let data: unknown | null = null
+    try {
+      data = await response.json()
+    } catch {
+      data = null
+    }
+
+    if (!response.ok) {
+      return {
+        status: response.status,
+        data,
+        errorMessage: extractFunctionErrorMessage(data, response.status),
+      }
+    }
+
+    return {
+      status: response.status,
+      data,
+      errorMessage: null,
+    }
+  } catch (error) {
+    return {
+      status: 0,
+      data: null,
+      errorMessage: error instanceof Error ? error.message : 'Failed to reach parser service',
+    }
+  }
+}
+
+async function getFreshAccessToken(supabase: ReturnType<typeof createClient>): Promise<string | null> {
+  const {
+    data: { session: initialSession },
+    error: initialSessionError,
+  } = await supabase.auth.getSession()
+
+  if (initialSessionError) {
+    return null
+  }
+
+  const nowSeconds = Math.floor(Date.now() / 1000)
+  const expiresAt = initialSession?.expires_at ?? null
+  const needsRefresh = !initialSession?.access_token || (typeof expiresAt === 'number' && expiresAt <= nowSeconds + 30)
+
+  if (!needsRefresh && initialSession?.access_token) {
+    const { data: userData, error: userError } = await supabase.auth.getUser(initialSession.access_token)
+    if (!userError && userData.user) {
+      return initialSession.access_token
+    }
+  }
+
+  const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession()
+  if (refreshError || !refreshData.session?.access_token) {
+    return null
+  }
+
+  return refreshData.session.access_token
+}
+
+async function forceRefreshAccessToken(supabase: ReturnType<typeof createClient>): Promise<string | null> {
+  const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession()
+  if (refreshError || !refreshData.session?.access_token) {
+    return null
+  }
+  return refreshData.session.access_token
+}
+
+const MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+
+function isSupportedMenuFile(file: File): boolean {
+  const fileName = file.name.toLowerCase()
+  return (
+    fileName.endsWith('.pdf') ||
+    fileName.endsWith('.txt') ||
+    fileName.endsWith('.png') ||
+    fileName.endsWith('.jpg') ||
+    fileName.endsWith('.jpeg') ||
+    fileName.endsWith('.webp')
+  )
+}
+
+function getUploadValidationError(file: File): string | null {
+  if (!isSupportedMenuFile(file)) {
+    return 'Only PDF, image, and TXT files are supported.'
+  }
+  if (file.size > MAX_UPLOAD_BYTES) {
+    return 'File is too large for synchronous parsing. Keep uploads under 20MB.'
+  }
+  return null
+}
 
 const parsingSteps = [
-  'Reading PDF document...',
-  'Detecting menu structure...',
-  'Extracting categories...',
-  'Parsing menu items...',
-  'Identifying prices...',
-  'Building menu tree...',
+  'Uploading menu file...',
+  'Submitting to parser...',
+  'Parsing with Claude...',
+  'Normalizing categories...',
+  'Preparing review data...',
 ]
+
+function normalizeParsedMenu(
+  restaurantId: string,
+  payload: ParseMenuResponse
+): { categories: MenuCategory[]; items: MenuItem[] } {
+  const safeCategories = payload.categories.length > 0
+    ? payload.categories
+    : [{ name: 'Uncategorized', display_order: 1 }]
+
+  const categories: MenuCategory[] = safeCategories.map((category, index) => ({
+    id: `parsed-cat-${index + 1}`,
+    restaurant_id: restaurantId,
+    name: category.name,
+    display_order: category.display_order ?? index + 1,
+    is_available: true,
+  }))
+
+  const categoryNameToId = new Map<string, string>()
+  categories.forEach((category) => {
+    categoryNameToId.set(category.name.toLowerCase(), category.id)
+  })
+
+  const firstCategoryId = categories[0]?.id ?? 'parsed-cat-1'
+
+  const items: MenuItem[] = payload.items.map((item, index) => {
+    const byName = item.category_name
+      ? categoryNameToId.get(item.category_name.toLowerCase())
+      : undefined
+    const byIndex = typeof item.category_index === 'number'
+      ? categories[item.category_index]?.id
+      : undefined
+    const categoryId = byName ?? byIndex ?? firstCategoryId
+
+    return {
+      id: `parsed-item-${index + 1}`,
+      restaurant_id: restaurantId,
+      category_id: categoryId,
+      name: item.name,
+      description: item.description,
+      price: item.price,
+      emoji: item.emoji ?? '🍽️',
+      is_available: true,
+      is_popular: item.is_popular ?? false,
+      is_new: item.is_new ?? false,
+      needs_review: item.needs_review ?? false,
+      display_order: index + 1,
+    }
+  })
+
+  return { categories, items }
+}
 
 export default function MenuUploadPage() {
   const router = useRouter()
-  const { importParsedMenu } = useMenuStore()
+  const searchParams = useSearchParams()
+  const supabase = useMemo(() => createClient(), [])
+  const restaurantId = useAuthStore((state) => state.restaurant?.id ?? null)
+  const importParsedMenu = useMenuStore((state) => state.importParsedMenu)
+  const isOnboardingFlow = searchParams.get('onboarding') === '1'
+
   const [step, setStep] = useState<1 | 2 | 3>(1)
   const [fileName, setFileName] = useState('')
   const [parsingStep, setParsingStep] = useState(0)
-  const [parsedCategories] = useState<MenuCategory[]>(PARSED_CATEGORIES)
-  const [parsedItems, setParsedItems] = useState<MenuItem[]>(PARSED_ITEMS)
+  const [parsedCategories, setParsedCategories] = useState<MenuCategory[]>([])
+  const [parsedItems, setParsedItems] = useState<MenuItem[]>([])
   const [editingItemId, setEditingItemId] = useState<string | null>(null)
+  const [error, setError] = useState('')
+  const [publishing, setPublishing] = useState(false)
 
-  const reviewCount = parsedItems.filter(i => i.needs_review).length
+  const reviewCount = parsedItems.filter((item) => item.needs_review).length
 
-  const simulateParsing = useCallback(() => {
-    setStep(2)
-    let stepIndex = 0
-    const interval = setInterval(() => {
-      stepIndex++
-      setParsingStep(stepIndex)
-      if (stepIndex >= parsingSteps.length) {
-        clearInterval(interval)
-        setTimeout(() => setStep(3), 500)
+  const parseFile = useCallback(
+    async (file: File) => {
+      if (!restaurantId) {
+        setError('Restaurant context not ready. Try again in a moment.')
+        return
       }
-    }, 500)
-    return () => clearInterval(interval)
-  }, [])
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (file) {
-      setFileName(file.name)
-      simulateParsing()
+      setError('')
+      setStep(2)
+      setParsingStep(0)
+
+      let uploadId: string | null = null
+      const filePath = `${restaurantId}/${Date.now()}-${file.name.replace(/\s+/g, '-')}`
+
+      const progressTimer = window.setInterval(() => {
+        setParsingStep((prev) => {
+          if (prev >= parsingSteps.length - 1) {
+            return prev
+          }
+          return prev + 1
+        })
+      }, 450)
+
+      try {
+        const { error: uploadError } = await supabase.storage
+          .from('menu-uploads')
+          .upload(filePath, file, {
+            cacheControl: '3600',
+            upsert: false,
+          })
+
+        if (uploadError) {
+          throw new Error(uploadError.message)
+        }
+
+        const { data: uploadRow, error: uploadRowError } = await supabase
+          .from('menu_uploads')
+          .insert({
+            restaurant_id: restaurantId,
+            file_url: filePath,
+            status: 'processing',
+          })
+          .select('id')
+          .single()
+
+        if (uploadRowError || !uploadRow) {
+          throw new Error(uploadRowError?.message ?? 'Could not create upload row')
+        }
+
+        uploadId = uploadRow.id
+
+        const mimeType = file.type || 'application/octet-stream'
+        const invokeBody = {
+          uploadId,
+          filePath,
+          fileName: file.name,
+          mimeType,
+        }
+        const anonToken = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? ''
+
+        let result: ParseFunctionResult | null = null
+        const initialAccessToken = await getFreshAccessToken(supabase)
+        if (initialAccessToken) {
+          result = await invokeParseMenuFunction({
+            accessToken: initialAccessToken,
+            body: invokeBody,
+          })
+        }
+
+        if (result?.status === 401) {
+          const retryAccessToken = await forceRefreshAccessToken(supabase)
+          if (retryAccessToken) {
+            result = await invokeParseMenuFunction({
+              accessToken: retryAccessToken,
+              body: invokeBody,
+            })
+          }
+        }
+
+        if (!result || result.status === 401) {
+          if (!anonToken) {
+            throw new Error('Your admin session expired. Sign in again, then retry upload.')
+          }
+          result = await invokeParseMenuFunction({
+            accessToken: anonToken,
+            body: invokeBody,
+          })
+        }
+
+        if (result.status < 200 || result.status >= 300) {
+          throw new Error(result.errorMessage ?? 'Failed to parse menu')
+        }
+
+        const data = result.data
+
+        const payload = data as ParseMenuResponse | null
+        if (!payload || !Array.isArray(payload.categories) || !Array.isArray(payload.items)) {
+          throw new Error('Parser returned an invalid payload')
+        }
+
+        if (payload.items.length === 0) {
+          let message =
+            'Could not extract enough readable content from that file. Upload a text-based PDF, clearer image, or TXT file, or enter items manually.'
+
+          const { data: uploadRecord } = await supabase
+            .from('menu_uploads')
+            .select('error_message')
+            .eq('id', uploadId)
+            .maybeSingle()
+
+          const parserMessage =
+            typeof uploadRecord?.error_message === 'string'
+              ? uploadRecord.error_message.trim()
+              : ''
+          if (parserMessage) {
+            message = parserMessage
+          }
+
+          setError(message)
+          setStep(1)
+          return
+        }
+
+        const normalized = normalizeParsedMenu(restaurantId, payload)
+        setParsedCategories(normalized.categories)
+        setParsedItems(normalized.items)
+        setStep(3)
+        setParsingStep(parsingSteps.length)
+
+        await supabase
+          .from('menu_uploads')
+          .update({
+            status: 'completed',
+            parsed_data: payload,
+            error_message: null,
+          })
+          .eq('id', uploadId)
+      } catch (parseError) {
+        const message = parseError instanceof Error ? parseError.message : 'Failed to parse menu'
+        setError(message)
+        setStep(1)
+
+        if (uploadId) {
+          await supabase
+            .from('menu_uploads')
+            .update({
+              status: 'failed',
+            })
+            .eq('id', uploadId)
+        }
+      } finally {
+        window.clearInterval(progressTimer)
+      }
+    },
+    [restaurantId, supabase]
+  )
+
+  const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) {
+      return
     }
+    const validationError = getUploadValidationError(file)
+    if (validationError) {
+      setError(validationError)
+      return
+    }
+    setFileName(file.name)
+    await parseFile(file)
   }
 
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault()
-    const file = e.dataTransfer.files[0]
-    if (file) {
-      setFileName(file.name)
-      simulateParsing()
+  const handleDrop = async (event: React.DragEvent<HTMLLabelElement>) => {
+    event.preventDefault()
+    const file = event.dataTransfer.files[0]
+    if (!file) {
+      return
     }
+    const validationError = getUploadValidationError(file)
+    if (validationError) {
+      setError(validationError)
+      return
+    }
+    setFileName(file.name)
+    await parseFile(file)
   }
 
-  const handlePublish = () => {
-    importParsedMenu(parsedCategories, parsedItems)
-    router.push('/menu')
+  const handlePublish = async () => {
+    if (parsedCategories.length === 0 || parsedItems.length === 0) {
+      setError('Nothing to publish yet.')
+      return
+    }
+
+    setPublishing(true)
+    setError('')
+    await importParsedMenu(parsedCategories, parsedItems)
+    setPublishing(false)
+    router.push(isOnboardingFlow ? '/tables?onboarding=1' : '/menu')
   }
 
   const removeItem = (id: string) => {
-    setParsedItems((items) => items.filter((i) => i.id !== id))
+    setParsedItems((items) => items.filter((item) => item.id !== id))
   }
 
-  const updateItemField = (id: string, field: string, value: string | number) => {
+  const updateItemField = (id: string, field: keyof MenuItem, value: string | number) => {
     setParsedItems((items) =>
-      items.map((i) => (i.id === id ? { ...i, [field]: value } : i))
+      items.map((item) => (item.id === id ? { ...item, [field]: value } : item))
     )
   }
 
@@ -93,17 +459,21 @@ export default function MenuUploadPage() {
     <div className="space-y-6">
       <PageHeader
         title="Upload Menu"
-        description="Import your menu from a PDF document"
+        description={
+          isOnboardingFlow
+            ? 'Step 2 of 3. Import your menu from a PDF, image, or text document.'
+            : 'Import your menu from a PDF, image, or text document'
+        }
       />
 
       <div className="flex items-center gap-2 text-sm">
-        {['Upload', 'Parsing', 'Review'].map((label, i) => {
-          const stepNum = (i + 1) as 1 | 2 | 3
-          const isActive = step === stepNum
-          const isDone = step > stepNum
+        {['Upload', 'Parsing', 'Review'].map((label, index) => {
+          const stepNumber = (index + 1) as 1 | 2 | 3
+          const isActive = step === stepNumber
+          const isDone = step > stepNumber
           return (
             <div key={label} className="flex items-center gap-2">
-              {i > 0 && <ChevronRight size={14} className="text-faint" />}
+              {index > 0 && <ChevronRight size={14} className="text-faint" />}
               <div
                 className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium ${
                   isActive ? 'bg-ink text-surface' : isDone ? 'bg-success/10 text-success' : 'bg-bg text-faint'
@@ -117,6 +487,12 @@ export default function MenuUploadPage() {
         })}
       </div>
 
+      {error && (
+        <div className="bg-error/10 border border-error/30 text-error rounded-[10px] px-4 py-3 text-sm">
+          {error}
+        </div>
+      )}
+
       <AnimatePresence mode="wait">
         {step === 1 && (
           <motion.div
@@ -126,17 +502,19 @@ export default function MenuUploadPage() {
             exit={{ opacity: 0, y: -12 }}
           >
             <label
-              onDragOver={(e) => e.preventDefault()}
+              onDragOver={(event) => event.preventDefault()}
               onDrop={handleDrop}
               className="flex flex-col items-center justify-center p-16 border-2 border-dashed border-border rounded-lg bg-surface2 hover:border-muted transition-colors cursor-pointer"
             >
               <Upload size={32} className="text-faint mb-4" />
-              <p className="text-sm font-medium text-ink mb-1">Drop your menu PDF here</p>
-              <p className="text-xs text-muted mb-4">or click to browse</p>
+              <p className="text-sm font-medium text-ink mb-1">Drop your menu file here</p>
+              <p className="text-xs text-muted mb-4">PDF, images, and TXT files are supported</p>
               <input
                 type="file"
-                accept=".pdf,.jpg,.png"
-                onChange={handleFileSelect}
+                accept=".pdf,.txt,.png,.jpg,.jpeg,.webp"
+                onChange={(event) => {
+                  void handleFileSelect(event)
+                }}
                 className="hidden"
               />
               <span className="px-4 py-2 bg-ink text-surface rounded-full text-sm font-medium">
@@ -160,17 +538,11 @@ export default function MenuUploadPage() {
             </div>
 
             <div className="space-y-3">
-              {parsingSteps.map((stepText, i) => {
-                const isDone = parsingStep > i
-                const isCurrent = parsingStep === i
+              {parsingSteps.map((stepText, index) => {
+                const isDone = parsingStep > index
+                const isCurrent = parsingStep === index
                 return (
-                  <motion.div
-                    key={stepText}
-                    initial={{ opacity: 0, x: -8 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: i * 0.1 }}
-                    className="flex items-center gap-3"
-                  >
+                  <div key={stepText} className="flex items-center gap-3">
                     {isDone ? (
                       <Check size={16} className="text-success shrink-0" />
                     ) : isCurrent ? (
@@ -181,7 +553,7 @@ export default function MenuUploadPage() {
                     <span className={`text-sm ${isDone ? 'text-muted' : isCurrent ? 'text-ink font-medium' : 'text-faint'}`}>
                       {stepText}
                     </span>
-                  </motion.div>
+                  </div>
                 )
               })}
             </div>
@@ -190,7 +562,7 @@ export default function MenuUploadPage() {
               <motion.div
                 className="h-full bg-ink rounded-full"
                 initial={{ width: '0%' }}
-                animate={{ width: `${(parsingStep / parsingSteps.length) * 100}%` }}
+                animate={{ width: `${(Math.min(parsingStep + 1, parsingSteps.length) / parsingSteps.length) * 100}%` }}
                 transition={{ duration: 0.3 }}
               />
             </div>
@@ -210,114 +582,92 @@ export default function MenuUploadPage() {
               </div>
             )}
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <div className="bg-surface2 border border-border rounded-lg p-6">
-                <h3 className="font-display font-bold text-base text-ink mb-4">PDF Preview</h3>
-                <div className="bg-white border border-border rounded p-6 space-y-6 font-serif">
-                  <div className="text-center border-b border-gray-200 pb-4">
-                    <p className="text-xl font-bold">THE OAKWOOD</p>
-                    <p className="text-xs text-gray-400 mt-1">MENU</p>
-                  </div>
-                  {parsedCategories.map((cat) => (
-                    <div key={cat.id}>
-                      <p className="font-bold text-sm uppercase tracking-wider mb-2">{cat.name}</p>
+            <div className="bg-surface2 border border-border rounded-lg p-6">
+              <h3 className="font-display font-bold text-base text-ink mb-4">Parsed Menu</h3>
+              <p className="text-xs text-muted mb-4">{parsedCategories.length} categories, {parsedItems.length} items</p>
+              <div className="space-y-4">
+                {parsedCategories.map((category) => (
+                  <div key={category.id}>
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="text-sm font-semibold text-ink">{category.name}</span>
+                    </div>
+                    <div className="ml-4 space-y-2">
                       {parsedItems
-                        .filter((i) => i.category_id === cat.id)
+                        .filter((item) => item.category_id === category.id)
                         .map((item) => (
-                          <div key={item.id} className="flex justify-between text-xs mb-1.5">
-                            <span>{item.name}</span>
-                            <span className="font-mono">${item.price.toFixed(2)}</span>
+                          <div
+                            key={item.id}
+                            className={`flex items-center justify-between bg-surface border rounded-sm px-3 py-2 ${
+                              item.needs_review ? 'border-l-4 border-l-amber-400 border-border' : 'border-border'
+                            }`}
+                          >
+                            {editingItemId === item.id ? (
+                              <div className="flex items-center gap-2 flex-1">
+                                <input
+                                  value={item.name}
+                                  onChange={(event) => updateItemField(item.id, 'name', event.target.value)}
+                                  className="flex-1 px-2 py-1 bg-bg border border-border rounded text-xs focus:outline-none"
+                                />
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  value={item.price}
+                                  onChange={(event) => updateItemField(item.id, 'price', parseFloat(event.target.value) || 0)}
+                                  className="w-20 px-2 py-1 bg-bg border border-border rounded text-xs focus:outline-none"
+                                />
+                                <button
+                                  onClick={() => setEditingItemId(null)}
+                                  className="text-xs text-success font-medium"
+                                >
+                                  Done
+                                </button>
+                              </div>
+                            ) : (
+                              <>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm">{item.emoji}</span>
+                                  <span className="text-sm text-ink">{item.name}</span>
+                                  {item.needs_review && (
+                                    <span className="text-amber-500 text-xs">&#9888;</span>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-display text-xs font-bold text-muted">
+                                    ${item.price.toFixed(2)}
+                                  </span>
+                                  <button
+                                    onClick={() => setEditingItemId(item.id)}
+                                    className="p-1 hover:bg-bg rounded transition-colors"
+                                    aria-label="Edit"
+                                  >
+                                    <Pencil size={12} className="text-muted" />
+                                  </button>
+                                  <button
+                                    onClick={() => removeItem(item.id)}
+                                    className="p-1 hover:bg-bg rounded transition-colors"
+                                    aria-label="Remove"
+                                  >
+                                    <Trash2 size={12} className="text-error" />
+                                  </button>
+                                </div>
+                              </>
+                            )}
                           </div>
                         ))}
                     </div>
-                  ))}
-                </div>
+                  </div>
+                ))}
               </div>
 
-              <div className="bg-surface2 border border-border rounded-lg p-6">
-                <h3 className="font-display font-bold text-base text-ink mb-4">Parsed Menu</h3>
-                <p className="text-xs text-muted mb-4">{parsedCategories.length} categories, {parsedItems.length} items</p>
-                <div className="space-y-4">
-                  {parsedCategories.map((cat) => (
-                    <div key={cat.id}>
-                      <div className="flex items-center gap-2 mb-2">
-                        <span className="text-sm font-semibold text-ink">{cat.name}</span>
-                      </div>
-                      <div className="ml-4 space-y-2">
-                        {parsedItems
-                          .filter((i) => i.category_id === cat.id)
-                          .map((item) => (
-                            <div
-                              key={item.id}
-                              className={`flex items-center justify-between bg-surface border rounded-sm px-3 py-2 ${
-                                item.needs_review ? 'border-l-4 border-l-amber-400 border-border' : 'border-border'
-                              }`}
-                            >
-                              {editingItemId === item.id ? (
-                                <div className="flex items-center gap-2 flex-1">
-                                  <input
-                                    value={item.name}
-                                    onChange={(e) => updateItemField(item.id, 'name', e.target.value)}
-                                    className="flex-1 px-2 py-1 bg-bg border border-border rounded text-xs focus:outline-none"
-                                  />
-                                  <input
-                                    type="number"
-                                    step="0.01"
-                                    value={item.price}
-                                    onChange={(e) => updateItemField(item.id, 'price', parseFloat(e.target.value) || 0)}
-                                    className="w-20 px-2 py-1 bg-bg border border-border rounded text-xs focus:outline-none"
-                                  />
-                                  <button
-                                    onClick={() => setEditingItemId(null)}
-                                    className="text-xs text-success font-medium"
-                                  >
-                                    Done
-                                  </button>
-                                </div>
-                              ) : (
-                                <>
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-sm">{item.emoji}</span>
-                                    <span className="text-sm text-ink">{item.name}</span>
-                                    {item.needs_review && (
-                                      <span className="text-amber-500 text-xs">&#9888;</span>
-                                    )}
-                                  </div>
-                                  <div className="flex items-center gap-2">
-                                    <span className="font-display text-xs font-bold text-muted">
-                                      ${item.price.toFixed(2)}
-                                    </span>
-                                    <button
-                                      onClick={() => setEditingItemId(item.id)}
-                                      className="p-1 hover:bg-bg rounded transition-colors"
-                                      aria-label="Edit"
-                                    >
-                                      <Pencil size={12} className="text-muted" />
-                                    </button>
-                                    <button
-                                      onClick={() => removeItem(item.id)}
-                                      className="p-1 hover:bg-bg rounded transition-colors"
-                                      aria-label="Remove"
-                                    >
-                                      <Trash2 size={12} className="text-error" />
-                                    </button>
-                                  </div>
-                                </>
-                              )}
-                            </div>
-                          ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                <button
-                  onClick={handlePublish}
-                  className="w-full mt-6 bg-ink text-surface font-medium text-sm py-2.5 rounded-full hover:opacity-90 transition-opacity"
-                >
-                  Publish Menu
-                </button>
-              </div>
+              <button
+                onClick={() => {
+                  void handlePublish()
+                }}
+                disabled={publishing}
+                className="w-full mt-6 bg-ink text-surface font-medium text-sm py-2.5 rounded-full hover:opacity-90 transition-opacity disabled:opacity-60"
+              >
+                {publishing ? 'Publishing...' : 'Publish Menu'}
+              </button>
             </div>
           </motion.div>
         )}

@@ -1,10 +1,13 @@
 'use client'
 
-import { useState } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
-import { Printer, Users, Building2, Plus, X, TestTube } from 'lucide-react'
-import { PageHeader } from '@/components/PageHeader'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { ElementType, ReactNode } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
+import { Building2, Plus, Printer, TestTube, Users, X } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { PageHeader } from '@/components/PageHeader'
+import { createClient } from '@/lib/supabase/client'
+import { useAuthStore } from '@/store/auth'
 
 interface StaffMember {
   id: string
@@ -13,20 +16,21 @@ interface StaffMember {
   role: 'owner' | 'manager' | 'staff'
 }
 
-const mockStaff: StaffMember[] = [
-  { id: 's1', name: 'Marco Rossi', email: 'marco@bite.so', role: 'owner' },
-  { id: 's2', name: 'Sofia Chen', email: 'sofia@bite.so', role: 'manager' },
-  { id: 's3', name: 'James Park', email: 'james@bite.so', role: 'staff' },
-]
+function normalizeRole(value: string): 'owner' | 'manager' | 'staff' {
+  if (value === 'owner' || value === 'manager') {
+    return value
+  }
+  return 'staff'
+}
 
 function SectionCard({
   icon: Icon,
   title,
   children,
 }: {
-  icon: React.ElementType
+  icon: ElementType
   title: string
-  children: React.ReactNode
+  children: ReactNode
 }) {
   return (
     <div className="bg-surface2 border border-border rounded">
@@ -40,42 +44,164 @@ function SectionCard({
 }
 
 export default function SettingsPage() {
-  const [restaurantName, setRestaurantName] = useState('The Oakwood')
-  const [slug, setSlug] = useState('the-oakwood')
-  const [cuisine, setCuisine] = useState('Modern European')
-  const [address, setAddress] = useState('42 Oak Street, Melbourne VIC 3000')
+  const supabase = useMemo(() => createClient(), [])
+  const restaurant = useAuthStore((state) => state.restaurant)
 
-  const [apiKey, setApiKey] = useState('sk_live_oakwood_printer_001')
-  const [printerId, setPrinterId] = useState('PRT-001-KITCHEN')
+  const [restaurantName, setRestaurantName] = useState('')
+  const [slug, setSlug] = useState('')
+  const [cuisine, setCuisine] = useState('')
+  const [address, setAddress] = useState('')
+  const [timezone, setTimezone] = useState('America/New_York')
+  const [apiKey, setApiKey] = useState('')
+  const [printerId, setPrinterId] = useState('')
 
-  const [staff, setStaff] = useState<StaffMember[]>(mockStaff)
+  const [staff, setStaff] = useState<StaffMember[]>([])
+  const [isLoadingStaff, setIsLoadingStaff] = useState(false)
+
   const [showInviteModal, setShowInviteModal] = useState(false)
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteRole, setInviteRole] = useState<'manager' | 'staff'>('staff')
+  const [isInviting, setIsInviting] = useState(false)
 
-  const handleSaveProfile = () => {
+  useEffect(() => {
+    if (!restaurant) {
+      return
+    }
+
+    setRestaurantName(restaurant.name)
+    setSlug(restaurant.slug)
+    setCuisine(restaurant.cuisine_type ?? '')
+    setAddress(restaurant.address ?? '')
+    setTimezone(restaurant.timezone ?? 'America/New_York')
+    setApiKey(restaurant.printnode_api_key ?? '')
+    setPrinterId(restaurant.printnode_printer_id ?? '')
+  }, [restaurant])
+
+  const loadStaff = useCallback(async () => {
+    if (!restaurant) {
+      setStaff([])
+      return
+    }
+
+    setIsLoadingStaff(true)
+    const { data, error } = await supabase
+      .from('staff')
+      .select('id, name, email, role')
+      .eq('restaurant_id', restaurant.id)
+      .order('created_at', { ascending: true })
+
+    if (error || !data) {
+      setIsLoadingStaff(false)
+      return
+    }
+
+    setStaff(
+      data.map((member) => ({
+        id: member.id,
+        name: member.name,
+        email: member.email,
+        role: normalizeRole(member.role),
+      }))
+    )
+    setIsLoadingStaff(false)
+  }, [restaurant, supabase])
+
+  useEffect(() => {
+    void loadStaff()
+  }, [loadStaff])
+
+  const handleSaveProfile = async () => {
+    if (!restaurant) {
+      return
+    }
+
+    const { error } = await supabase
+      .from('restaurants')
+      .update({
+        name: restaurantName.trim(),
+        slug: slug.trim(),
+        cuisine_type: cuisine.trim() || null,
+        address: address.trim() || null,
+        timezone: timezone.trim() || null,
+        printnode_api_key: apiKey.trim() || null,
+        printnode_printer_id: printerId.trim() || null,
+      })
+      .eq('id', restaurant.id)
+
+    if (error) {
+      toast.error(error.message)
+      return
+    }
+
     toast.success('Restaurant profile saved')
   }
 
-  const handleTestPrint = () => {
+  const handleTestPrint = async () => {
+    if (!restaurant) {
+      return
+    }
+
+    const { error } = await supabase.functions.invoke('trigger-print', {
+      body: {
+        mode: 'test',
+        restaurantId: restaurant.id,
+      },
+    })
+
+    if (error) {
+      toast.error(error.message || 'Could not send test print')
+      return
+    }
+
     toast.success('Test print sent to kitchen printer')
   }
 
-  const handleInvite = () => {
-    if (!inviteEmail) return
-    const newStaff: StaffMember = {
-      id: `s${Date.now()}`,
-      name: inviteEmail.split('@')[0],
-      email: inviteEmail,
-      role: inviteRole,
+  const handleInvite = async () => {
+    const email = inviteEmail.trim().toLowerCase()
+    if (!email) {
+      toast.error('Please enter an email')
+      return
     }
-    setStaff([...staff, newStaff])
+
+    setIsInviting(true)
+
+    const response = await fetch('/api/invite-staff', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        email,
+        role: inviteRole,
+      }),
+    })
+
+    let payload: unknown = null
+    try {
+      payload = await response.json()
+    } catch {
+      payload = null
+    }
+
+    if (!response.ok) {
+      const message =
+        typeof payload === 'object' && payload !== null && 'error' in payload && typeof payload.error === 'string'
+          ? payload.error
+          : 'Failed to send invite'
+      toast.error(message)
+      setIsInviting(false)
+      return
+    }
+
+    toast.success('Invite sent')
     setShowInviteModal(false)
     setInviteEmail('')
-    toast.success(`Invite sent to ${inviteEmail}`)
+    setInviteRole('staff')
+    setIsInviting(false)
+    await loadStaff()
   }
 
-  const roleColors: Record<string, string> = {
+  const roleColors: Record<'owner' | 'manager' | 'staff', string> = {
     owner: 'bg-ink text-surface',
     manager: 'bg-surface border border-border text-muted',
     staff: 'bg-bg text-faint',
@@ -85,24 +211,23 @@ export default function SettingsPage() {
     <div className="space-y-6">
       <PageHeader title="Settings" description="Manage your restaurant configuration" />
 
-      {/* Restaurant Profile */}
       <SectionCard icon={Building2} title="Restaurant Profile">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-ink mb-1.5">Restaurant Name</label>
             <input
               value={restaurantName}
-              onChange={(e) => setRestaurantName(e.target.value)}
+              onChange={(event) => setRestaurantName(event.target.value)}
               className="w-full px-3 py-2 bg-surface border border-border rounded-sm text-sm focus:outline-none focus:ring-2 focus:ring-ink/10"
             />
           </div>
           <div>
             <label className="block text-sm font-medium text-ink mb-1.5">Slug</label>
             <div className="flex items-center">
-              <span className="text-sm text-muted mr-1">bite.so/</span>
+              <span className="text-sm text-muted mr-1">menu/</span>
               <input
                 value={slug}
-                onChange={(e) => setSlug(e.target.value)}
+                onChange={(event) => setSlug(event.target.value)}
                 className="flex-1 px-3 py-2 bg-surface border border-border rounded-sm text-sm focus:outline-none focus:ring-2 focus:ring-ink/10"
               />
             </div>
@@ -111,35 +236,44 @@ export default function SettingsPage() {
             <label className="block text-sm font-medium text-ink mb-1.5">Cuisine Type</label>
             <input
               value={cuisine}
-              onChange={(e) => setCuisine(e.target.value)}
+              onChange={(event) => setCuisine(event.target.value)}
               className="w-full px-3 py-2 bg-surface border border-border rounded-sm text-sm focus:outline-none focus:ring-2 focus:ring-ink/10"
             />
           </div>
           <div>
+            <label className="block text-sm font-medium text-ink mb-1.5">Timezone</label>
+            <input
+              value={timezone}
+              onChange={(event) => setTimezone(event.target.value)}
+              className="w-full px-3 py-2 bg-surface border border-border rounded-sm text-sm focus:outline-none focus:ring-2 focus:ring-ink/10"
+            />
+          </div>
+          <div className="md:col-span-2">
             <label className="block text-sm font-medium text-ink mb-1.5">Address</label>
             <input
               value={address}
-              onChange={(e) => setAddress(e.target.value)}
+              onChange={(event) => setAddress(event.target.value)}
               className="w-full px-3 py-2 bg-surface border border-border rounded-sm text-sm focus:outline-none focus:ring-2 focus:ring-ink/10"
             />
           </div>
         </div>
         <button
-          onClick={handleSaveProfile}
+          onClick={() => {
+            void handleSaveProfile()
+          }}
           className="mt-4 px-6 py-2 bg-ink text-surface rounded-full text-sm font-medium hover:opacity-90 transition-opacity"
         >
           Save Changes
         </button>
       </SectionCard>
 
-      {/* Printer Setup */}
       <SectionCard icon={Printer} title="Printer Setup">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-ink mb-1.5">API Key</label>
+            <label className="block text-sm font-medium text-ink mb-1.5">PrintNode API Key</label>
             <input
               value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
+              onChange={(event) => setApiKey(event.target.value)}
               className="w-full px-3 py-2 bg-surface border border-border rounded-sm text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ink/10"
             />
           </div>
@@ -147,13 +281,15 @@ export default function SettingsPage() {
             <label className="block text-sm font-medium text-ink mb-1.5">Printer ID</label>
             <input
               value={printerId}
-              onChange={(e) => setPrinterId(e.target.value)}
+              onChange={(event) => setPrinterId(event.target.value)}
               className="w-full px-3 py-2 bg-surface border border-border rounded-sm text-sm font-mono focus:outline-none focus:ring-2 focus:ring-ink/10"
             />
           </div>
         </div>
         <button
-          onClick={handleTestPrint}
+          onClick={() => {
+            void handleTestPrint()
+          }}
           className="mt-4 flex items-center gap-2 px-6 py-2 border border-border rounded-full text-sm font-medium text-ink hover:bg-bg transition-colors"
         >
           <TestTube size={14} />
@@ -161,25 +297,21 @@ export default function SettingsPage() {
         </button>
       </SectionCard>
 
-      {/* Staff Accounts */}
       <SectionCard icon={Users} title="Staff Accounts">
         <div className="space-y-3">
           {staff.map((member) => (
-            <div
-              key={member.id}
-              className="flex items-center justify-between py-2.5 border-b border-border last:border-0"
-            >
+            <div key={member.id} className="flex items-center justify-between py-2.5 border-b border-border last:border-0">
               <div>
                 <p className="text-sm font-medium text-ink">{member.name}</p>
                 <p className="text-xs text-muted">{member.email}</p>
               </div>
-              <span
-                className={`px-2.5 py-0.5 rounded-full text-xs font-medium ${roleColors[member.role]}`}
-              >
+              <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium ${roleColors[member.role]}`}>
                 {member.role.charAt(0).toUpperCase() + member.role.slice(1)}
               </span>
             </div>
           ))}
+          {!isLoadingStaff && staff.length === 0 && <p className="text-sm text-muted">No staff members found.</p>}
+          {isLoadingStaff && <p className="text-sm text-muted">Loading staff...</p>}
         </div>
         <button
           onClick={() => setShowInviteModal(true)}
@@ -190,7 +322,6 @@ export default function SettingsPage() {
         </button>
       </SectionCard>
 
-      {/* Invite Modal */}
       <AnimatePresence>
         {showInviteModal && (
           <>
@@ -209,10 +340,7 @@ export default function SettingsPage() {
             >
               <div className="flex items-center justify-between mb-4">
                 <h2 className="font-display font-bold text-lg text-ink">Invite Staff</h2>
-                <button
-                  onClick={() => setShowInviteModal(false)}
-                  className="p-1 hover:bg-bg rounded-sm transition-colors"
-                >
+                <button onClick={() => setShowInviteModal(false)} className="p-1 hover:bg-bg rounded-sm transition-colors">
                   <X size={16} />
                 </button>
               </div>
@@ -223,7 +351,7 @@ export default function SettingsPage() {
                   <input
                     type="email"
                     value={inviteEmail}
-                    onChange={(e) => setInviteEmail(e.target.value)}
+                    onChange={(event) => setInviteEmail(event.target.value)}
                     placeholder="staff@example.com"
                     className="w-full px-3 py-2 bg-surface border border-border rounded-sm text-sm placeholder:text-faint focus:outline-none focus:ring-2 focus:ring-ink/10"
                   />
@@ -232,7 +360,7 @@ export default function SettingsPage() {
                   <label className="block text-sm font-medium text-ink mb-1.5">Role</label>
                   <select
                     value={inviteRole}
-                    onChange={(e) => setInviteRole(e.target.value as 'manager' | 'staff')}
+                    onChange={(event) => setInviteRole(event.target.value as 'manager' | 'staff')}
                     className="w-full px-3 py-2 bg-surface border border-border rounded-sm text-sm focus:outline-none"
                   >
                     <option value="staff">Staff</option>
@@ -243,10 +371,13 @@ export default function SettingsPage() {
 
               <div className="flex gap-2">
                 <button
-                  onClick={handleInvite}
-                  className="flex-1 bg-ink text-surface font-medium text-sm py-2.5 rounded-full hover:opacity-90 transition-opacity"
+                  onClick={() => {
+                    void handleInvite()
+                  }}
+                  disabled={isInviting}
+                  className="flex-1 bg-ink text-surface font-medium text-sm py-2.5 rounded-full hover:opacity-90 transition-opacity disabled:opacity-50"
                 >
-                  Send Invite
+                  {isInviting ? 'Sending...' : 'Send Invite'}
                 </button>
                 <button
                   onClick={() => setShowInviteModal(false)}

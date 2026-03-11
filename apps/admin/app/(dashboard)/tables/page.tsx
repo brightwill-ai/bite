@@ -1,80 +1,250 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
+import JSZip from 'jszip'
 import { Plus, Download, X } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
 import { PageHeader } from '@/components/PageHeader'
+import { createClient } from '@/lib/supabase/client'
+import { useAuthStore } from '@/store/auth'
 
 interface TableData {
   id: string
   number: number
   active: boolean
+  qrUrl: string
 }
 
-const initialTables: TableData[] = Array.from({ length: 15 }, (_, i) => ({
-  id: `table-${i + 1}`,
-  number: i + 1,
-  active: [1, 2, 3, 5, 7, 9, 11, 14].includes(i + 1),
-}))
+function resolveMenuBaseUrl(): string {
+  const configured = process.env.NEXT_PUBLIC_MENU_BASE_URL
+  if (configured && configured.trim()) {
+    return configured.replace(/\/$/, '')
+  }
+  if (typeof window !== 'undefined') {
+    if (window.location.hostname.includes('localhost')) {
+      return 'http://localhost:3001'
+    }
+  }
+  return 'https://menu.trybite.us'
+}
+
+function buildQrUrl(slug: string, tableNumber: number): string {
+  return `${resolveMenuBaseUrl()}/${slug}/table/${tableNumber}`
+}
 
 export default function TablesPage() {
-  const [tables, setTables] = useState<TableData[]>(initialTables)
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const supabase = useMemo(() => createClient(), [])
+  const restaurant = useAuthStore((state) => state.restaurant)
+  const [tables, setTables] = useState<TableData[]>([])
+  const [isLoading, setIsLoading] = useState(false)
   const [showAddModal, setShowAddModal] = useState(false)
   const [newTableCount, setNewTableCount] = useState('1')
+  const [isGoingLive, setIsGoingLive] = useState(false)
+  const [isDownloadingAll, setIsDownloadingAll] = useState(false)
+  const isOnboardingFlow = searchParams.get('onboarding') === '1'
 
-  const handleAddTables = () => {
-    const count = parseInt(newTableCount, 10)
-    if (isNaN(count) || count < 1) return
+  useEffect(() => {
+    const loadTables = async () => {
+      if (!restaurant) {
+        setTables([])
+        return
+      }
+      setIsLoading(true)
+      const { data, error } = await supabase
+        .from('tables')
+        .select('id, table_number, is_active, qr_code_url')
+        .eq('restaurant_id', restaurant.id)
+        .order('table_number', { ascending: true })
 
-    const maxNum = Math.max(...tables.map((t) => t.number), 0)
-    const newTables: TableData[] = Array.from({ length: count }, (_, i) => ({
-      id: `table-${maxNum + i + 1}`,
-      number: maxNum + i + 1,
-      active: false,
+      if (error || !data) {
+        setIsLoading(false)
+        return
+      }
+
+      const normalized = data.map((table) => {
+        const tableNumber = Number.parseInt(table.table_number, 10)
+        return {
+          id: table.id,
+          number: Number.isFinite(tableNumber) ? tableNumber : 0,
+          active: table.is_active ?? false,
+          qrUrl: table.qr_code_url || buildQrUrl(restaurant.slug, tableNumber),
+        }
+      })
+
+      setTables(normalized.filter((table) => table.number > 0))
+      setIsLoading(false)
+    }
+
+    void loadTables()
+  }, [restaurant, supabase])
+
+  const handleAddTables = async () => {
+    const count = Number.parseInt(newTableCount, 10)
+    if (!restaurant || !Number.isFinite(count) || count < 1) {
+      return
+    }
+
+    const maxNumber = tables.reduce((max, table) => Math.max(max, table.number), 0)
+    const inserts = Array.from({ length: count }, (_, index) => {
+      const tableNumber = maxNumber + index + 1
+      return {
+        restaurant_id: restaurant.id,
+        table_number: String(tableNumber),
+        label: null,
+        qr_code_url: buildQrUrl(restaurant.slug, tableNumber),
+        is_active: false,
+      }
+    })
+
+    const { data, error } = await supabase
+      .from('tables')
+      .insert(inserts)
+      .select('id, table_number, is_active, qr_code_url')
+
+    if (error || !data) {
+      return
+    }
+
+    const created = data.map((table) => ({
+      id: table.id,
+      number: Number.parseInt(table.table_number, 10),
+      active: table.is_active ?? false,
+      qrUrl: table.qr_code_url || buildQrUrl(restaurant.slug, Number.parseInt(table.table_number, 10)),
     }))
 
-    setTables([...tables, ...newTables])
+    setTables((previous) =>
+      [...previous, ...created].sort((a, b) => a.number - b.number)
+    )
     setShowAddModal(false)
     setNewTableCount('1')
+  }
+
+  const svgToPngBlob = (svgElement: Element): Promise<Blob | null> => {
+    return new Promise((resolve) => {
+      const svgData = new XMLSerializer().serializeToString(svgElement)
+      const canvas = document.createElement('canvas')
+      canvas.width = 512
+      canvas.height = 512
+      const context = canvas.getContext('2d')
+      const image = new Image()
+      image.onload = () => {
+        context?.drawImage(image, 0, 0, 512, 512)
+        canvas.toBlob((blob) => resolve(blob), 'image/png')
+      }
+      image.onerror = () => resolve(null)
+      image.src = `data:image/svg+xml;base64,${btoa(svgData)}`
+    })
   }
 
   const handleDownloadQR = (tableNumber: number) => {
     const svg = document.getElementById(`qr-${tableNumber}`)
     if (!svg) return
-    const svgData = new XMLSerializer().serializeToString(svg)
-    const canvas = document.createElement('canvas')
-    canvas.width = 512
-    canvas.height = 512
-    const ctx = canvas.getContext('2d')
-    const img = new Image()
-    img.onload = () => {
-      ctx?.drawImage(img, 0, 0, 512, 512)
-      const a = document.createElement('a')
-      a.download = `table-${tableNumber}-qr.png`
-      a.href = canvas.toDataURL('image/png')
-      a.click()
+    void svgToPngBlob(svg).then((blob) => {
+      if (!blob) return
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.download = `table-${tableNumber}-qr.png`
+      link.href = url
+      link.click()
+      URL.revokeObjectURL(url)
+    })
+  }
+
+  const handleDownloadAllQRs = async () => {
+    if (tables.length === 0) return
+    setIsDownloadingAll(true)
+
+    const zip = new JSZip()
+    await Promise.all(
+      tables.map(async (table) => {
+        const svg = document.getElementById(`qr-${table.number}`)
+        if (!svg) return
+        const blob = await svgToPngBlob(svg)
+        if (blob) {
+          zip.file(`table-${table.number}-qr.png`, blob)
+        }
+      })
+    )
+
+    const zipBlob = await zip.generateAsync({ type: 'blob' })
+    const url = URL.createObjectURL(zipBlob)
+    const link = document.createElement('a')
+    link.download = 'all-qr-codes.zip'
+    link.href = url
+    link.click()
+    URL.revokeObjectURL(url)
+
+    setIsDownloadingAll(false)
+  }
+
+  const handleGoLive = async () => {
+    if (!restaurant) {
+      return
     }
-    img.src = 'data:image/svg+xml;base64,' + btoa(svgData)
+
+    setIsGoingLive(true)
+    const { error } = await supabase
+      .from('restaurants')
+      .update({ is_active: true })
+      .eq('id', restaurant.id)
+
+    setIsGoingLive(false)
+    if (error) {
+      return
+    }
+
+    router.push('/dashboard')
   }
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Tables"
-        description="Manage tables and QR codes"
+        description={
+          isOnboardingFlow
+            ? 'Step 3 of 3. Add tables, then set your restaurant live.'
+            : 'Manage tables and QR codes'
+        }
         action={
-          <button
-            onClick={() => setShowAddModal(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-ink text-surface rounded-full text-sm font-medium hover:opacity-90 transition-opacity"
-          >
-            <Plus size={14} />
-            Add Tables
-          </button>
+          <div className="flex items-center gap-2">
+            {isOnboardingFlow && (
+              <button
+                onClick={() => {
+                  void handleGoLive()
+                }}
+                disabled={isGoingLive}
+                className="px-4 py-2 border border-border rounded-full text-sm font-medium text-ink hover:bg-bg transition-colors disabled:opacity-50"
+              >
+                {isGoingLive ? 'Going Live...' : 'Go Live'}
+              </button>
+            )}
+            {tables.length > 0 && (
+              <button
+                onClick={() => {
+                  void handleDownloadAllQRs()
+                }}
+                disabled={isDownloadingAll}
+                className="flex items-center gap-2 px-4 py-2 border border-border text-ink rounded-full text-sm font-medium hover:bg-bg transition-colors disabled:opacity-50"
+              >
+                <Download size={14} />
+                {isDownloadingAll ? 'Downloading...' : 'Download All QRs'}
+              </button>
+            )}
+            <button
+              onClick={() => setShowAddModal(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-ink text-surface rounded-full text-sm font-medium hover:opacity-90 transition-opacity"
+            >
+              <Plus size={14} />
+              Add Tables
+            </button>
+          </div>
         }
       />
 
-      {/* Tables Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
         {tables.map((table) => (
           <motion.div
@@ -98,7 +268,7 @@ export default function TablesPage() {
             <div className="bg-white p-3 rounded-sm mb-3">
               <QRCodeSVG
                 id={`qr-${table.number}`}
-                value={`https://bite.so/the-oakwood/table/${table.number}`}
+                value={table.qrUrl}
                 size={120}
                 level="M"
                 bgColor="#FFFFFF"
@@ -117,7 +287,16 @@ export default function TablesPage() {
         ))}
       </div>
 
-      {/* Add Tables Modal */}
+      {isLoading && (
+        <div className="text-sm text-muted">Loading tables...</div>
+      )}
+
+      {!isLoading && tables.length === 0 && (
+        <div className="bg-surface2 border border-border rounded p-5 text-sm text-muted">
+          No tables created yet. Add your first batch to generate QR codes.
+        </div>
+      )}
+
       <AnimatePresence>
         {showAddModal && (
           <>
@@ -153,17 +332,19 @@ export default function TablesPage() {
                   min="1"
                   max="50"
                   value={newTableCount}
-                  onChange={(e) => setNewTableCount(e.target.value)}
+                  onChange={(event) => setNewTableCount(event.target.value)}
                   className="w-full px-3 py-2 bg-surface border border-border rounded-sm text-sm focus:outline-none focus:ring-2 focus:ring-ink/10"
                 />
               </div>
 
               <div className="flex gap-2">
                 <button
-                  onClick={handleAddTables}
+                  onClick={() => {
+                    void handleAddTables()
+                  }}
                   className="flex-1 bg-ink text-surface font-medium text-sm py-2.5 rounded-full hover:opacity-90 transition-opacity"
                 >
-                  Add {newTableCount} Table{parseInt(newTableCount) !== 1 ? 's' : ''}
+                  Add {newTableCount} Table{Number.parseInt(newTableCount, 10) !== 1 ? 's' : ''}
                 </button>
                 <button
                   onClick={() => setShowAddModal(false)}

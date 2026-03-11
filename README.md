@@ -1,58 +1,35 @@
 # Bite
 
-**QR table-side ordering for restaurants.**  
-Customers scan, order, and pay — all from their phone.
+QR table-side ordering for restaurants. Customers scan, order, and track ticket status from their phone. Restaurants manage menus, tables, and live orders from the admin portal.
 
-[Live Demo](https://bite.so) · [Admin Demo](https://admin.bite.so/login) · [Docs](#) · [Report Bug](#)
+## Apps
 
----
+| App | Workspace | Local URL | Purpose |
+|---|---|---|---|
+| Web | `@bite/web` | http://localhost:3000 | Marketing site |
+| Menu | `@bite/menu` | http://localhost:3001 | Customer ordering app |
+| Admin | `@bite/admin` | http://localhost:3002 | Restaurant operations portal |
 
-</div>
+## Stack
 
-## What Is Bite?
+- Next.js 14 (App Router), TypeScript (strict), Tailwind CSS
+- Turborepo monorepo
+- Zustand for client state
+- Supabase (Postgres, Auth, Storage, Edge Functions)
 
-Bite is a SaaS platform that lets restaurants offer QR code table-side ordering. Each table gets a unique QR code. Customers scan it, browse the full menu, customize items, and place orders that go directly to the kitchen — no app download, no waiting for a server.
+## Zustand Conventions
 
-For the restaurant: faster table turns, fewer order errors, and a real-time view of every active table.
-
----
-
-## The Three Apps
-
-| App | URL | Description |
-|---|---|---|
-| `apps/web` | bite.so | Marketing landing page |
-| `apps/menu` | menu.bite.so/[slug]/table/[id] | Customer QR ordering app |
-| `apps/admin` | admin.bite.so | Restaurant management portal |
-
----
+- Prefer selector-based subscriptions in components (`useStore((state) => state.slice)`) instead of `useStore()` full-store objects.
+- Keep context setters (for example restaurant/table context) idempotent by no-oping when values are unchanged.
 
 ## Quick Start
 
-### Prerequisites
-- Node.js 20+
-- npm 10+
-
-### Setup
-
 ```bash
-# Clone the repo
-git clone https://github.com/yourname/bite.git
-cd bite
-
-# Install all dependencies (all workspaces)
 npm install
-
-# Start all three apps in parallel
 npm run dev
 ```
 
-Apps will be available at:
-- Landing page → http://localhost:3000
-- Customer menu → http://localhost:3001 (auto-redirects to demo restaurant)
-- Admin portal  → http://localhost:3002 (login: `admin@bite.so` / `demo1234`)
-
-### Run a single app
+Run one app only:
 
 ```bash
 npm run dev:web
@@ -60,312 +37,175 @@ npm run dev:menu
 npm run dev:admin
 ```
 
----
+Typecheck:
 
-## Tech Stack
-
-| Layer | Technology |
-|---|---|
-| Framework | Next.js 14 (App Router) |
-| Language | TypeScript (strict) |
-| Monorepo | Turborepo |
-| Styling | Tailwind CSS |
-| Animation | Framer Motion |
-| State | Zustand |
-| Icons | Lucide React |
-| Toasts | react-hot-toast |
-| QR Codes | qrcode.react |
-| Database | Supabase (Phase 2) |
-| Auth | Supabase Auth (Phase 2) |
-| Payments | Adyen for Platforms (Phase 4) |
-| Printing | PrintNode (Phase 2) |
-| AI | Claude API — menu parser (Phase 2) |
-| Hosting | AWS ECS + ECR |
-| CI/CD | GitHub Actions |
-
----
-
-## Project Structure
-
+```bash
+npm run typecheck
 ```
+
+## Environment
+
+Each app uses its own `.env.local` copied from `.env.example`.
+
+### `apps/web/.env.example`
+
+```env
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+```
+
+### `apps/menu/.env.example`
+
+```env
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+```
+
+### `apps/admin/.env.example`
+
+```env
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+NEXT_PUBLIC_MENU_BASE_URL=
+```
+
+## Supabase (Phase 2)
+
+Supabase is fully wired for menu/admin runtime data.
+
+- Project ref: `ltswdtctfrelzomozmme`
+- MCP config: `.claude/settings.json`
+- Typed client models: `packages/types/supabase.ts`
+- Migrations: `supabase/migrations`
+- Edge Functions:
+  - `supabase/functions/parse-menu`
+  - `supabase/functions/trigger-print`
+- Keep a `deno.json` import map inside each function directory (for example `supabase/functions/parse-menu/deno.json`) so `supabase functions deploy` can resolve bare imports like `@supabase/supabase-js`.
+- Admin menu upload now uses a synchronous server-side parse flow: upload to storage, then invoke `parse-menu` with file metadata (`uploadId`, `filePath`, `fileName`, `mimeType`).
+- Admin upload calls `parse-menu` with a direct function endpoint `fetch` (explicit `Authorization` + `apikey` headers) instead of relying only on `supabase.functions.invoke`, then retries once after token refresh on `401`.
+- Admin app auth now uses a dedicated cookie name (`sb-admin-auth-token`) in browser client, server client, and middleware to avoid localhost cross-app session collisions during multi-app dev (`:3000/:3001/:3002`).
+- Admin upload keeps users on the upload step (with a clear error) when parser output has zero items, instead of opening an empty review state.
+- `parse-menu` is Claude-native (Files API + Messages API structured outputs) and returns the existing `categories[]`/`items[]` contract used by publish flow.
+- `parse-menu` uploads the stored menu file to Anthropic (`/v1/files` with `anthropic-beta: files-api-2025-04-14`) and parses with structured output schema (`output_config.format`).
+- `parse-menu` validates/normalizes model output (drops invalid items, normalizes prices/categories/booleans) and marks all items `needs_review=true` when confidence is low or too many rows are dropped.
+- `parse-menu` retries transient Anthropic failures once (`429`/`5xx`) with backoff and uses request timeouts via `AbortController`.
+- Deterministic parser fallback remains in `parse-menu` for Claude failures when usable text is available (request `rawText` or server-side extraction for PDF/TXT).
+- Sync guardrails enforce supported file types and a 20MB upload limit.
+- Menu UI normalizes emoji shortcodes/tokens (for example `:burger:`/`hot_pepper`) to Unicode emoji before rendering and falls back to defaults when invalid.
+- Migration strategy doc: `docs/migration_strategy.md`
+- Security hardening applied:
+  - fixed function `search_path` settings
+  - tightened public order insert RLS checks
+  - optimized RLS policies to remove advisor warnings
+
+### Database
+
+The schema includes 11 tables:
+
+- `restaurants`
+- `staff`
+- `tables`
+- `menu_categories`
+- `menu_items`
+- `modifier_groups`
+- `modifiers`
+- `orders`
+- `order_items`
+- `order_item_modifiers`
+- `menu_uploads`
+
+DB functions:
+
+- `get_next_ticket_number(restaurant_id uuid)`
+- `create_order(...)`
+- `update_updated_at()` trigger function
+- `get_user_restaurant_ids()` (RLS helper)
+
+Storage buckets:
+
+- `qr-codes` (public)
+- `menu-uploads` (private)
+- `menu-images` (public)
+
+## Docker / CI
+
+- `docker-compose.yml` injects Supabase env vars into all three app containers.
+- `.github/workflows/deploy.yml` validates Docker builds for all three apps, then deploys over SSH on pushes to `main`.
+
+Required GitHub repo secrets:
+
+- `SUPABASE_URL`
+- `SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `SERVER_HOST`
+- `SERVER_USER`
+- `SERVER_PASSWORD`
+- One-command setup (uses `GH_TOKEN`/`GITHUB_TOKEN` or git credential helper, and updates whichever `SUPABASE_*` vars you export): `.github/scripts/set-supabase-secrets.sh`
+
+Edge Function secrets:
+
+- optional `PRINT_WEBHOOK_SECRET` (for secured webhook calls)
+- required `ANTHROPIC_API_KEY` (Claude API key for `parse-menu`)
+- optional `ANTHROPIC_MODEL` (default: `claude-haiku-4-5`)
+- optional `ANTHROPIC_TIMEOUT_MS` (default: `25000`)
+
+Set parser secrets:
+
+```bash
+supabase secrets set \
+  ANTHROPIC_API_KEY=<your_api_key> \
+  ANTHROPIC_MODEL=claude-haiku-4-5 \
+  ANTHROPIC_TIMEOUT_MS=25000
+```
+
+## Current Status
+
+### Phase 1 (Frontend MVP)
+- [x] All three apps and core UI
+- [x] Shared design system and components
+
+### Phase 2 (Backend Wiring)
+- [x] Supabase project + MCP setup
+- [x] Schema + RLS + storage buckets
+- [x] Security/performance advisor warnings resolved to info-only
+- [x] Real admin auth + onboarding
+- [x] Menu/admin migrated off mock runtime data
+- [x] Real order creation via RPC
+- [x] Menu parser edge function
+- [x] Print trigger edge function
+
+### Remaining External Blockers
+- [x] Added GitHub secret `SUPABASE_SERVICE_ROLE_KEY` in `brightwill-ai/bite`
+- [x] Verified remote `parse-menu` function matches local Claude-first parser implementation
+
+### Phase 3+
+- [ ] KDS + realtime operational tooling
+- [ ] Payments and payouts
+
+## Repo Layout
+
+```text
 bite/
 ├── apps/
-│   ├── web/                    # Marketing site
-│   │   └── app/
-│   │       ├── page.tsx        # Landing page (all sections)
-│   │       └── layout.tsx
-│   ├── menu/                   # Customer QR app
-│   │   ├── app/
-│   │   │   └── [slug]/table/[tableId]/
-│   │   │       └── page.tsx    # Menu home (all overlays here)
-│   │   ├── components/
-│   │   │   ├── MenuHeader.tsx
-│   │   │   ├── CategorySidebar.tsx
-│   │   │   ├── MenuItemCard.tsx
-│   │   │   ├── ItemDetailSheet.tsx
-│   │   │   ├── FloatingCartBar.tsx
-│   │   │   ├── CartSheet.tsx
-│   │   │   └── OrderConfirmation.tsx
-│   │   └── store/
-│   │       └── cart.ts         # Zustand cart store
-│   └── admin/                  # Restaurant admin portal
-│       ├── app/
-│       │   ├── (auth)/login/
-│       │   └── (dashboard)/
-│       │       ├── dashboard/
-│       │       ├── menu/
-│       │       │   └── upload/ # PDF parser UI
-│       │       ├── tables/
-│       │       ├── orders/
-│       │       └── settings/
-│       ├── components/
-│       └── store/
-│           ├── menu.ts         # Zustand menu store (localStorage)
-│           └── auth.ts         # Mock auth store
+│   ├── web/
+│   ├── menu/
+│   └── admin/
 ├── packages/
-│   ├── ui/                     # Shared components (used in 2+ apps)
+│   ├── ui/
 │   ├── types/
-│   │   ├── index.ts            # All TypeScript types
-│   │   └── mock.ts             # Mock data (The Oakwood restaurant)
 │   └── config/
-│       ├── tailwind.config.js  # Shared Tailwind config
-│       └── eslint.config.js
+├── supabase/
+│   ├── migrations/
+│   └── functions/
 ├── .claude/
-│   └── skills/                 # Claude Code skill files
+│   └── skills/
 ├── .github/
 │   └── workflows/
-│       └── deploy.yml          # Auto-deploy on push to main
-├── nginx/
-│   └── bite.conf               # Nginx reverse proxy config
-├── Dockerfile                  # Shared multi-stage build
-├── docker-compose.yml          # Orchestrates all 3 apps
-├── CLAUDE.md                   # Agent instructions
+│       └── deploy.yml
+├── Dockerfile
+├── docker-compose.yml
+├── AGENTS.md
+├── CLAUDE.md
 └── turbo.json
 ```
-
----
-
-## Design System
-
-Bite uses a warm, editorial design language — off-white backgrounds, bold Fraunces serif for display text, DM Sans for UI, jet-black CTAs.
-
-### Colors
-
-| Token | Hex | Usage |
-|---|---|---|
-| `bg` | `#EDECEA` | Page backgrounds |
-| `surface` | `#F5F4F1` | Cards, sidebars |
-| `surface2` | `#FFFFFF` | Sheets, modals |
-| `border` | `#E0DDD9` | Dividers, card borders |
-| `ink` | `#1A1816` | Primary text, CTAs |
-| `muted` | `#6B6760` | Secondary text |
-| `faint` | `#A8A49F` | Placeholders, disabled |
-| `popular` | `#D4622A` | Popular badge, highlights |
-| `success` | `#3A7D52` | New badge, success |
-| `error` | `#C0392B` | Error states |
-
-### Fonts
-- **Fraunces** (serif) — prices, headlines, ticket numbers
-- **DM Sans** — all UI text, buttons, labels
-- **JetBrains Mono** — order/ticket numbers, codes
-
----
-
-## Customer Flow
-
-```
-Customer scans QR at table
-        ↓
-Menu loads instantly (no app download, no login)
-        ↓
-Browse by category — left sidebar + right content scroll
-        ↓
-Tap item → bottom sheet with modifier options
-        ↓
-Add to cart → floating cart bar appears
-        ↓
-Review cart → Place Order
-        ↓
-Order confirmed (ticket #, summary)
-        ↓
-[Phase 2] Order fires to DB → triggers kitchen printer
-        ↓
-Kitchen makes food → server delivers
-```
-
----
-
-## Restaurant Admin Flow
-
-```
-Owner signs up → enters restaurant name
-        ↓
-Uploads menu PDF → AI parses items & prices
-        ↓
-Reviews parsed menu → makes edits → publishes
-        ↓
-Generates QR codes for each table → downloads & prints
-        ↓
-Configures kitchen printer (PrintNode)
-        ↓
-Goes live — orders start coming in
-        ↓
-Monitors orders on live dashboard
-```
-
----
-
-## Development Guide
-
-### Adding a New Component
-
-Read `.claude/skills/component.md` first, then:
-
-1. Decide: shared (`packages/ui/`) or app-specific (`apps/[app]/components/`)?
-2. Create the file in the right location
-3. Export from the package's `index.ts` if shared
-4. Add proper TypeScript props interface
-5. Use only design system tokens (no hardcoded colors/spacing)
-
-### Adding a New Admin Page
-
-Read `.claude/skills/admin-page.md` first, then:
-
-1. Create `apps/admin/app/(dashboard)/[page-name]/page.tsx`
-2. Add nav item to `apps/admin/components/Sidebar.tsx`
-3. Page gets the dashboard shell layout automatically
-
-### Extending Mock Data
-
-Read `.claude/skills/mock-data.md` first. All mock data lives in `packages/types/mock.ts`.
-
-### Adding a Shared Type
-
-All types live in `packages/types/index.ts`. After adding, run `npm run typecheck` to verify no breaks.
-
----
-
-## Environment Variables
-
-### `apps/web`
-```env
-NEXT_PUBLIC_APP_URL=http://localhost:3000
-```
-
-### `apps/menu`
-```env
-NEXT_PUBLIC_APP_URL=http://localhost:3001
-NEXT_PUBLIC_SUPABASE_URL=           # Phase 2
-NEXT_PUBLIC_SUPABASE_ANON_KEY=      # Phase 2
-```
-
-### `apps/admin`
-```env
-NEXT_PUBLIC_APP_URL=http://localhost:3002
-NEXT_PUBLIC_SUPABASE_URL=           # Phase 2
-NEXT_PUBLIC_SUPABASE_ANON_KEY=      # Phase 2
-```
-
-Copy `.env.example` to `.env.local` in each app. Never commit `.env.local`.
-
----
-
-## Deployment
-
-Each app runs in its own Docker container on a single server, behind an Nginx reverse proxy.
-
-### Architecture
-
-```
-GitHub (push to main) → GitHub Actions → SSH into server → git pull → docker compose up --build -d
-```
-
-| Subdomain | Container | Port |
-|---|---|---|
-| `trybite.us` | bite-web | 3000 |
-| `menu.trybite.us` | bite-menu | 3001 |
-| `admin.trybite.us` | bite-admin | 3002 |
-
-### Key Files
-
-| File | Purpose |
-|---|---|
-| `Dockerfile` | Multi-stage build (shared by all 3 apps via `APP` arg) |
-| `docker-compose.yml` | Orchestrates all 3 services |
-| `nginx/bite.conf` | Nginx reverse proxy config |
-| `.github/workflows/deploy.yml` | Auto-deploy on push to `main` |
-
-### Manual Deploy
-
-```bash
-ssh root@<server-ip>
-cd /root/bite
-git pull origin main
-docker compose up --build -d
-```
-
-### CI/CD (Auto-Deploy)
-
-Pushes to `main` automatically deploy via GitHub Actions (`.github/workflows/deploy.yml`).
-
-**Required GitHub Secrets** (Settings → Secrets → Actions):
-- `SERVER_HOST` — server IP address
-- `SERVER_USER` — SSH user (e.g. `root`)
-- `SERVER_PASSWORD` — SSH password
-
----
-
-## Roadmap
-
-**Phase 1 — Frontend MVP** ← _we are here_
-- [x] Monorepo scaffold
-- [x] Design system
-- [x] Landing page
-- [x] Customer QR ordering app (mock data)
-- [x] Admin portal (mock data, localStorage)
-
-**Phase 2 — Backend**
-- [ ] Supabase schema + RLS policies
-- [ ] Real auth (Supabase Auth)
-- [ ] Replace mock data with Supabase queries
-- [ ] LLM menu parser (Claude API)
-- [ ] Order submission to database
-- [ ] PrintNode kitchen print trigger
-
-**Phase 3 — Operations**
-- [ ] Kitchen Display System (KDS)
-- [ ] Supabase Realtime (live order updates)
-- [ ] QR code generation + Supabase Storage
-- [ ] Multi-table session management
-
-**Phase 4 — Payments**
-- [ ] Adyen for Platforms account setup
-- [ ] Sub-merchant KYC onboarding
-- [ ] Payment flow in customer app
-- [ ] Payout dashboard in admin
-
----
-
-## Working With Claude Code
-
-This repo is optimized for AI-assisted development. See `CLAUDE.md` for the full agent instructions.
-
-Key things Claude Code will do automatically:
-- Read `CLAUDE.md` at the start of every session
-- Check `.claude/skills/` for relevant patterns before starting tasks
-- Follow the design system without being asked
-- Stay in Phase 1 scope unless explicitly told to move forward
-- Write TypeScript strict-mode compatible code throughout
-- **Update documentation after every change** — `CLAUDE.md`, `README.md`, and relevant `.claude/skills/` files are always kept in sync with the codebase
-
-To start a session:
-```bash
-cd bite
-claude
-```
-
----
-
-## License
-
-MIT © Bite Technologies, Inc.

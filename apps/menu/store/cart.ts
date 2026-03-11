@@ -29,7 +29,16 @@ export const useCartStore = create<CartStore>((set, get) => ({
   specialInstructions: '',
 
   setContext: (restaurantId, tableId, restaurantName) =>
-    set({ restaurantId, tableId, restaurantName }),
+    set((state) => {
+      if (
+        state.restaurantId === restaurantId &&
+        state.tableId === tableId &&
+        state.restaurantName === restaurantName
+      ) {
+        return state
+      }
+      return { restaurantId, tableId, restaurantName }
+    }),
 
   setInstructions: (text) => set({ specialInstructions: text }),
 
