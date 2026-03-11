@@ -42,6 +42,7 @@ Use this when creating or editing pages in `apps/admin`.
 - Querying without restaurant scope.
 - During onboarding, inserting `restaurants` with `is_active=false` and chaining `.select()` can fail due RLS on `RETURNING` before a staff row exists. Insert without returning rows, create owner staff row, then read.
 - Existing `tables.qr_code_url` values may be stale (for example old localhost links created from local sessions). Prefer canonical slug/table URLs and sync stale DB rows.
+- Legacy tables may be inactive from older flows; keep table creation active-by-default and auto-activate stale inactive rows in table management.
 - Failing hard on local PDF extraction; `/api/extract-pdf` uses position-based ordering and price-line repair, and upload should still fall back to `parse-menu` edge extraction when local extraction fails.
 - Image uploads (`.png/.jpg/.jpeg/.webp`) should run through `/api/extract-image` OCR before calling `parse-menu`; if OCR returns no text, keep users on upload with a clear retry message.
 - If `parse-menu` returns a non-2xx response, keep upload resilient by using a local deterministic text fallback rather than dropping users back to step 1.

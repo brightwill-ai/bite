@@ -95,7 +95,11 @@ export default function TablesPage() {
         return
       }
 
-      const staleQrUpdates: Array<{ id: string; qrCodeUrl: string }> = []
+      const staleTableUpdates: Array<{
+        id: string
+        qrCodeUrl?: string
+        shouldActivate: boolean
+      }> = []
       const normalized = data.flatMap((table) => {
         const tableNumber = Number.parseInt(table.table_number, 10)
         if (!Number.isFinite(tableNumber) || tableNumber <= 0) {
@@ -103,14 +107,21 @@ export default function TablesPage() {
         }
 
         const canonicalQrUrl = buildQrUrl(restaurant.slug, tableNumber)
-        if (shouldPersistQrUrl(canonicalQrUrl) && table.qr_code_url !== canonicalQrUrl) {
-          staleQrUpdates.push({ id: table.id, qrCodeUrl: canonicalQrUrl })
+        const needsQrSync = shouldPersistQrUrl(canonicalQrUrl) && table.qr_code_url !== canonicalQrUrl
+        const shouldActivate = table.is_active !== true
+
+        if (needsQrSync || shouldActivate) {
+          staleTableUpdates.push({
+            id: table.id,
+            qrCodeUrl: needsQrSync ? canonicalQrUrl : undefined,
+            shouldActivate,
+          })
         }
 
         return [{
           id: table.id,
           number: tableNumber,
-          active: table.is_active ?? false,
+          active: true,
           qrUrl: canonicalQrUrl,
         }]
       })
@@ -118,14 +129,21 @@ export default function TablesPage() {
       setTables(normalized)
       setIsLoading(false)
 
-      if (staleQrUpdates.length > 0) {
+      if (staleTableUpdates.length > 0) {
         void Promise.all(
-          staleQrUpdates.map(({ id, qrCodeUrl }) =>
-            supabase
+          staleTableUpdates.map(({ id, qrCodeUrl, shouldActivate }) => {
+            const updatePayload: { is_active?: boolean; qr_code_url?: string } = {}
+            if (qrCodeUrl) {
+              updatePayload.qr_code_url = qrCodeUrl
+            }
+            if (shouldActivate) {
+              updatePayload.is_active = true
+            }
+            return supabase
               .from('tables')
-              .update({ qr_code_url: qrCodeUrl })
+              .update(updatePayload)
               .eq('id', id)
-          )
+          })
         )
       }
     }
@@ -148,7 +166,7 @@ export default function TablesPage() {
         table_number: String(tableNumber),
         label: null,
         qr_code_url: shouldPersistQrUrl(canonicalQrUrl) ? canonicalQrUrl : null,
-        is_active: false,
+        is_active: true,
       }
     })
 
@@ -164,7 +182,7 @@ export default function TablesPage() {
     const created = data.map((table) => ({
       id: table.id,
       number: Number.parseInt(table.table_number, 10),
-      active: table.is_active ?? false,
+      active: true,
       qrUrl: buildQrUrl(restaurant.slug, Number.parseInt(table.table_number, 10)),
     }))
 

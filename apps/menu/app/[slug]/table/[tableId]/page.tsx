@@ -198,7 +198,6 @@ export default async function MenuPage({ params }: PageProps) {
     .select('id, restaurant_id, table_number, label, qr_code_url, is_active, created_at, updated_at')
     .eq('restaurant_id', restaurant.id)
     .eq('table_number', params.tableId)
-    .eq('is_active', true)
     .single()
 
   if (tableError || !tableRow) {

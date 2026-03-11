@@ -16,7 +16,7 @@ Do not import `@bite/types/mock` in runtime menu flow.
 Menu page now loads from Supabase:
 
 - `restaurants` by `slug`
-- `tables` by `restaurant_id` + `table_number`
+- `tables` by `restaurant_id` + `table_number` (do not hard-fail on stale `is_active=false` table flags)
 - `menu_categories`, `menu_items`
 - `modifier_groups`, `modifiers`
 - Normalize `menu_items.emoji` and `modifiers.emoji` before render; DB/parser values may arrive as shortcodes (`:burger:`) or token text (`hot_pepper`).

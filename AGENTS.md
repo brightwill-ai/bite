@@ -288,6 +288,7 @@ layout.tsx             — Next.js layouts (required name)
 
 - **Localhost auth collisions**: Running multiple apps on `localhost` ports can share Supabase SSR auth cookies and churn refresh tokens. Keep app-specific cookie names aligned across browser client, server client, and middleware (admin uses `sb-admin-auth-token`).
 - **Stale QR link rows**: `tables.qr_code_url` can retain old localhost links created from local sessions against a remote DB. Admin tables now canonicalize QR URLs to the current menu base URL and background-sync stale rows; re-download/reprint QR assets after this sync.
+- **Table active drift**: Legacy `tables.is_active=false` rows can block QR scans if route queries depend on the flag. Keep table creation default active and auto-repair legacy rows in admin tables flow.
 - **Deploy SSH timeouts**: Remote `docker compose build --parallel` for all three Next apps can exceed 15 minutes. Keep workflow `command_timeout` and job timeout aligned (currently `25m` and `30` minutes).
 - **Deploy env passthrough**: SSH deploy must forward `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` into the remote shell before `docker compose build/up`; otherwise compose defaults to blank values.
 - **Next.js 14 config keys**: In this repo's Next.js 14.2.21 apps, keep `outputFileTracingRoot` and admin's PDF external package config under `experimental` (`outputFileTracingRoot`, `serverComponentsExternalPackages`) to avoid invalid `next.config.js` warnings in CI/Docker builds.
