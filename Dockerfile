@@ -22,7 +22,8 @@ ENV NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
 ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
 ENV SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
 COPY . .
-RUN npx turbo build --filter=@bite/${APP}
+RUN --mount=type=cache,target=/app/apps/${APP}/.next/cache \
+    npx turbo build --filter=@bite/${APP}
 
 # Production runner
 FROM node:20-alpine AS runner

@@ -131,13 +131,16 @@ Storage buckets:
 ## Docker / CI
 
 - `docker-compose.yml` injects Supabase env vars into all three app containers.
-- `.github/workflows/deploy.yml` passes Supabase secrets as build args.
+- `.github/workflows/deploy.yml` validates Docker builds for all three apps, then deploys over SSH on pushes to `main`.
 
 Required GitHub repo secrets:
 
 - `SUPABASE_URL`
 - `SUPABASE_ANON_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY`
+- `SERVER_HOST`
+- `SERVER_USER`
+- `SERVER_PASSWORD`
 - One-command setup (uses `GH_TOKEN`/`GITHUB_TOKEN` or git credential helper, and updates whichever `SUPABASE_*` vars you export): `.github/scripts/set-supabase-secrets.sh`
 
 Edge Function secrets:
@@ -197,6 +200,12 @@ bite/
 │   └── functions/
 ├── .claude/
 │   └── skills/
+├── .github/
+│   └── workflows/
+│       └── deploy.yml
+├── Dockerfile
+├── docker-compose.yml
 ├── AGENTS.md
+├── CLAUDE.md
 └── turbo.json
 ```
