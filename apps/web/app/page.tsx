@@ -19,8 +19,41 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
-// TODO(phase-2): Replace with real admin signup URL once auth is implemented
-const ADMIN_URL = process.env.NEXT_PUBLIC_ADMIN_URL ?? 'http://localhost:3002'
+function removeTrailingSlash(url: string): string {
+  return url.replace(/\/+$/, '')
+}
+
+function isLocalHostname(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0'
+}
+
+function resolveAdminUrl(): string {
+  const configured = process.env.NEXT_PUBLIC_ADMIN_URL?.trim()
+  if (configured) {
+    return removeTrailingSlash(configured)
+  }
+
+  if (typeof window !== 'undefined') {
+    const { protocol, hostname } = window.location
+    if (isLocalHostname(hostname)) {
+      return 'http://localhost:3002'
+    }
+
+    const normalizedHost = hostname.startsWith('www.') ? hostname.slice(4) : hostname
+    if (normalizedHost.startsWith('admin.')) {
+      return `${protocol}//${normalizedHost}`
+    }
+    if (normalizedHost.startsWith('web.')) {
+      return `${protocol}//admin.${normalizedHost.slice(4)}`
+    }
+    if (normalizedHost.startsWith('menu.')) {
+      return `${protocol}//admin.${normalizedHost.slice(5)}`
+    }
+    return `${protocol}//admin.${normalizedHost}`
+  }
+
+  return 'https://admin.trybite.us'
+}
 
 /* ─────────────── DATA ─────────────── */
 
@@ -271,7 +304,7 @@ export default function LandingPage() {
   }, [])
 
   const handleEarlyAccess = () => {
-    window.location.href = ADMIN_URL
+    window.location.href = resolveAdminUrl()
   }
 
   const scrollTo = (id: string) => {

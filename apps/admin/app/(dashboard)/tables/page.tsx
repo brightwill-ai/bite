@@ -17,21 +17,51 @@ interface TableData {
   qrUrl: string
 }
 
+function removeTrailingSlash(url: string): string {
+  return url.replace(/\/+$/, '')
+}
+
+function isLocalHostname(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '0.0.0.0'
+}
+
 function resolveMenuBaseUrl(): string {
-  const configured = process.env.NEXT_PUBLIC_MENU_BASE_URL
-  if (configured && configured.trim()) {
-    return configured.replace(/\/$/, '')
+  const configured = process.env.NEXT_PUBLIC_MENU_BASE_URL?.trim()
+  if (configured) {
+    return removeTrailingSlash(configured)
   }
   if (typeof window !== 'undefined') {
-    if (window.location.hostname.includes('localhost')) {
+    const { protocol, hostname } = window.location
+    if (isLocalHostname(hostname)) {
       return 'http://localhost:3001'
     }
+
+    const normalizedHost = hostname.startsWith('www.') ? hostname.slice(4) : hostname
+    if (normalizedHost.startsWith('menu.')) {
+      return `${protocol}//${normalizedHost}`
+    }
+    if (normalizedHost.startsWith('admin.')) {
+      return `${protocol}//menu.${normalizedHost.slice(6)}`
+    }
+    if (normalizedHost.startsWith('web.')) {
+      return `${protocol}//menu.${normalizedHost.slice(4)}`
+    }
+
+    return `${protocol}//menu.${normalizedHost}`
   }
   return 'https://menu.trybite.us'
 }
 
 function buildQrUrl(slug: string, tableNumber: number): string {
   return `${resolveMenuBaseUrl()}/${slug}/table/${tableNumber}`
+}
+
+function shouldPersistQrUrl(qrUrl: string): boolean {
+  try {
+    return !isLocalHostname(new URL(qrUrl).hostname)
+  } catch {
+    return false
+  }
 }
 
 export default function TablesPage() {
@@ -65,18 +95,39 @@ export default function TablesPage() {
         return
       }
 
-      const normalized = data.map((table) => {
+      const staleQrUpdates: Array<{ id: string; qrCodeUrl: string }> = []
+      const normalized = data.flatMap((table) => {
         const tableNumber = Number.parseInt(table.table_number, 10)
-        return {
-          id: table.id,
-          number: Number.isFinite(tableNumber) ? tableNumber : 0,
-          active: table.is_active ?? false,
-          qrUrl: table.qr_code_url || buildQrUrl(restaurant.slug, tableNumber),
+        if (!Number.isFinite(tableNumber) || tableNumber <= 0) {
+          return []
         }
+
+        const canonicalQrUrl = buildQrUrl(restaurant.slug, tableNumber)
+        if (shouldPersistQrUrl(canonicalQrUrl) && table.qr_code_url !== canonicalQrUrl) {
+          staleQrUpdates.push({ id: table.id, qrCodeUrl: canonicalQrUrl })
+        }
+
+        return [{
+          id: table.id,
+          number: tableNumber,
+          active: table.is_active ?? false,
+          qrUrl: canonicalQrUrl,
+        }]
       })
 
-      setTables(normalized.filter((table) => table.number > 0))
+      setTables(normalized)
       setIsLoading(false)
+
+      if (staleQrUpdates.length > 0) {
+        void Promise.all(
+          staleQrUpdates.map(({ id, qrCodeUrl }) =>
+            supabase
+              .from('tables')
+              .update({ qr_code_url: qrCodeUrl })
+              .eq('id', id)
+          )
+        )
+      }
     }
 
     void loadTables()
@@ -91,11 +142,12 @@ export default function TablesPage() {
     const maxNumber = tables.reduce((max, table) => Math.max(max, table.number), 0)
     const inserts = Array.from({ length: count }, (_, index) => {
       const tableNumber = maxNumber + index + 1
+      const canonicalQrUrl = buildQrUrl(restaurant.slug, tableNumber)
       return {
         restaurant_id: restaurant.id,
         table_number: String(tableNumber),
         label: null,
-        qr_code_url: buildQrUrl(restaurant.slug, tableNumber),
+        qr_code_url: shouldPersistQrUrl(canonicalQrUrl) ? canonicalQrUrl : null,
         is_active: false,
       }
     })
@@ -113,7 +165,7 @@ export default function TablesPage() {
       id: table.id,
       number: Number.parseInt(table.table_number, 10),
       active: table.is_active ?? false,
-      qrUrl: table.qr_code_url || buildQrUrl(restaurant.slug, Number.parseInt(table.table_number, 10)),
+      qrUrl: buildQrUrl(restaurant.slug, Number.parseInt(table.table_number, 10)),
     }))
 
     setTables((previous) =>

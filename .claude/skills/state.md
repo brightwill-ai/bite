@@ -21,6 +21,7 @@ All global state uses Zustand. Use this when creating or editing stores.
 - Auth/menu stores are Supabase-backed.
 - Do not use `persist` middleware for menu/auth data.
 - Call async store actions to load and mutate DB-backed state.
+- Keep login/signup UX responsive: avoid blocking route transitions on extra `initialize()` calls when server-protected routes will hydrate state anyway.
 
 ## Store Design
 

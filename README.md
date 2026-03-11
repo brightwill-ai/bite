@@ -52,7 +52,11 @@ Each app uses its own `.env.local` copied from `.env.example`.
 ```env
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_ANON_KEY=
+NEXT_PUBLIC_ADMIN_URL=
 ```
+
+`NEXT_PUBLIC_ADMIN_URL` is optional. When omitted, the landing page CTA derives
+`admin.<current-domain>` in production and uses `http://localhost:3002` in local dev.
 
 ### `apps/menu/.env.example`
 
@@ -70,6 +74,9 @@ SUPABASE_SERVICE_ROLE_KEY=
 NEXT_PUBLIC_MENU_BASE_URL=
 ```
 
+`NEXT_PUBLIC_MENU_BASE_URL` is optional. Tables/QR links default to
+`menu.<current-domain>` in production and `http://localhost:3001` in local dev.
+
 ## Supabase (Phase 2)
 
 Supabase is fully wired for menu/admin runtime data.
@@ -85,6 +92,8 @@ Supabase is fully wired for menu/admin runtime data.
 - Admin menu upload now uses a synchronous server-side parse flow: upload to storage, then invoke `parse-menu` with file metadata (`uploadId`, `filePath`, `fileName`, `mimeType`).
 - Admin upload calls `parse-menu` with a direct function endpoint `fetch` (explicit `Authorization` + `apikey` headers) instead of relying only on `supabase.functions.invoke`, then retries once after token refresh on `401`.
 - Admin app auth now uses a dedicated cookie name (`sb-admin-auth-token`) in browser client, server client, and middleware to avoid localhost cross-app session collisions during multi-app dev (`:3000/:3001/:3002`).
+- Admin table management now canonicalizes every `tables.qr_code_url` to the current menu base URL (slug + table path) and background-syncs stale rows, fixing legacy localhost QR links from earlier dev sessions.
+- Menu root (`/`) is now a stable instruction page instead of redirecting to a hardcoded demo table route.
 - Admin upload keeps users on the upload step (with a clear error) when parser output has zero items, instead of opening an empty review state.
 - `parse-menu` is Claude-native (Files API + Messages API structured outputs) and returns the existing `categories[]`/`items[]` contract used by publish flow.
 - `parse-menu` uploads the stored menu file to Anthropic (`/v1/files` with `anthropic-beta: files-api-2025-04-14`) and parses with structured output schema (`output_config.format`).

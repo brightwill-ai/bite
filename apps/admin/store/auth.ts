@@ -243,7 +243,8 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
       return { success: false, error: error.message }
     }
 
-    await get().initialize()
+    // Avoid blocking login navigation on an extra auth bootstrap round-trip.
+    void get().initialize()
     return { success: true }
   },
 

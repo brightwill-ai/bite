@@ -7,6 +7,7 @@ Use this when touching `apps/menu`.
 - Main customer flow stays in `app/[slug]/table/[tableId]/page.tsx`.
 - Keep interactions as overlays/sheets, not route transitions.
 - Mobile-first layout only.
+- Keep `app/page.tsx` as a stable generic entry point (instructional/neutral state), not a hardcoded redirect to seeded demo data.
 
 ## Data Source (Phase 2)
 
