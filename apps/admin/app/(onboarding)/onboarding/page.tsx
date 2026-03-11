@@ -12,12 +12,14 @@ export default function OnboardingPage() {
     isAuthenticated,
     needsOnboarding,
     createRestaurant,
+    logout,
   } = useAuthStore((state) => ({
     initialize: state.initialize,
     isLoading: state.isLoading,
     isAuthenticated: state.isAuthenticated,
     needsOnboarding: state.needsOnboarding,
     createRestaurant: state.createRestaurant,
+    logout: state.logout,
   }))
 
   const [name, setName] = useState('')
@@ -89,12 +91,23 @@ export default function OnboardingPage() {
     <div className="min-h-screen bg-bg flex items-center justify-center px-4">
       <div className="w-full max-w-[520px] bg-surface2 border border-border rounded-lg p-8">
         <div className="mb-6">
-          <h1 className="font-display font-bold text-3xl text-ink tracking-tight">
-            Finish Setup
-          </h1>
-          <p className="text-muted text-sm mt-2">
-            Step 1 of 3. Create your restaurant workspace, then upload your menu and set up tables.
-          </p>
+          <div className="flex items-start justify-between">
+            <div>
+              <h1 className="font-display font-bold text-3xl text-ink tracking-tight">
+                Finish Setup
+              </h1>
+              <p className="text-muted text-sm mt-2">
+                Step 1 of 3. Create your restaurant workspace, then upload your menu and set up tables.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void logout().then(() => router.push('/login'))}
+              className="text-xs text-faint hover:text-muted transition-colors mt-1 shrink-0 ml-4"
+            >
+              Sign out
+            </button>
+          </div>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">

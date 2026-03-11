@@ -297,7 +297,11 @@ export const useAuthStore = create<AuthStore>((set, get) => ({
     const restaurantId =
       typeof window.crypto.randomUUID === 'function'
         ? window.crypto.randomUUID()
-        : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`
+        : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+            const r = Math.floor(Math.random() * 16)
+            const v = c === 'x' ? r : (r & 0x3) | 0x8
+            return v.toString(16)
+          })
 
     const { error: restaurantError } = await supabase
       .from('restaurants')
