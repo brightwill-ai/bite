@@ -2,6 +2,8 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import type { Database } from '@bite/types/supabase'
 
+const ADMIN_AUTH_COOKIE_NAME = 'sb-admin-auth-token'
+
 export function createClient() {
   const cookieStore = cookies()
 
@@ -22,6 +24,9 @@ export function createClient() {
             // setAll can be called from Server Component — ignore
           }
         },
+      },
+      cookieOptions: {
+        name: ADMIN_AUTH_COOKIE_NAME,
       },
     }
   )

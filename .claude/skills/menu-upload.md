@@ -37,13 +37,16 @@ Guardrail:
 ## Upload + Parse Flow
 
 1. Validate extension + size.
-2. Upload original file to `menu-uploads` storage bucket.
-3. Insert `menu_uploads` row with `status='processing'`.
-4. Invoke `parse-menu` with:
+2. Ensure there is a live Supabase auth session before invoking `parse-menu` (attempt token refresh first; if still missing/expired, prompt re-login instead of invoking).
+3. Upload original file to `menu-uploads` storage bucket.
+4. Insert `menu_uploads` row with `status='processing'`.
+5. Invoke `parse-menu` with:
    - `uploadId`, `filePath`, `fileName`, `mimeType`
+   - explicit `Authorization: Bearer <token>` + `apikey` headers via direct function endpoint call
+   - on `401`, refresh session token and retry once, then fallback to anon JWT token to avoid session drift blocking uploads
    - optional `rawText` only for explicit fallback paths
-5. Normalize parser output for review UI.
-6. If parser returns zero items, keep user on upload step with a clear error.
+6. Normalize parser output for review UI.
+7. If parser returns zero items, keep user on upload step with a clear error.
 
 ## Edge Function Rules (`parse-menu`)
 

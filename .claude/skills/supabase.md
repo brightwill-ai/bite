@@ -21,6 +21,7 @@ Use app-local helpers:
 - `apps/menu/lib/supabase/server.ts`
 - `apps/admin/lib/supabase/client.ts`
 - `apps/admin/lib/supabase/server.ts`
+- In localhost multi-app dev, avoid shared SSR auth cookies across ports. Keep per-app cookie names aligned between browser helper, server helper, and middleware (admin uses `sb-admin-auth-token`).
 
 Always use the typed `Database` model from `@bite/types/supabase`.
 
@@ -94,6 +95,8 @@ If you add a table, add:
 - For PDF extraction fallback, use position-based ordering (line reconstruction + detached price-line repositioning) with `pdfjs-dist@5.5.207` config (`cMapUrl`, `cMapPacked`, `standardFontDataUrl`, `useSystemFonts`)
 - Never decode raw PDF bytes as plain text when extraction fails
 - Admin upload should not proceed to review when parser output has zero items; keep users on upload with a clear error message
+- Admin upload invokes `parse-menu` through direct fetch to `/functions/v1/parse-menu` with explicit `Authorization` + `apikey` headers (avoid client library token drift edge cases)
+- For `401` function responses: retry once after `refreshSession()`, then fallback to anon JWT token so uploads are not blocked by stale user session state
 - Enforce sync guardrails (supported file types + 20MB max upload)
 - Updates `menu_uploads.status`, `parsed_data`, and `error_message`
 

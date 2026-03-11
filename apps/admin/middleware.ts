@@ -1,6 +1,8 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
+const ADMIN_AUTH_COOKIE_NAME = 'sb-admin-auth-token'
+
 export async function middleware(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request })
 
@@ -21,6 +23,9 @@ export async function middleware(request: NextRequest) {
             supabaseResponse.cookies.set(name, value, options)
           )
         },
+      },
+      cookieOptions: {
+        name: ADMIN_AUTH_COOKIE_NAME,
       },
     }
   )

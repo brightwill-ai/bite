@@ -274,6 +274,11 @@ layout.tsx             — Next.js layouts (required name)
 
 - **Sync parser guardrails**: Enforce parser upload constraints (supported types + 20MB cap) and keep upload UX on step 1 when parser returns zero items.
 
+- **Parse function auth failures**: `supabase.functions.invoke('parse-menu')` can return `401` (`Edge Function returned a non-2xx status code`) when the browser session is stale; check session first and send explicit `Authorization: Bearer <access_token>`.
+- **Function invoke auth drift**: In admin upload flow, prefer explicit direct `fetch` to `/functions/v1/parse-menu` with `Authorization` and `apikey` headers plus refresh+retry on `401` to avoid transient client SDK token mismatch.
+
+- **Localhost auth collisions**: Running multiple apps on `localhost` ports can share Supabase SSR auth cookies and churn refresh tokens. Keep app-specific cookie names aligned across browser client, server client, and middleware (admin uses `sb-admin-auth-token`).
+
 ---
 
 ## Mandatory: Update Documentation After Every Change

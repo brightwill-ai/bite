@@ -32,6 +32,118 @@ type ParseMenuResponse = {
   items: ParsedItem[]
 }
 
+type ParseFunctionResult = {
+  status: number
+  data: unknown | null
+  errorMessage: string | null
+}
+
+function extractFunctionErrorMessage(data: unknown, status: number): string {
+  if (
+    data &&
+    typeof data === 'object' &&
+    'error' in data &&
+    typeof data.error === 'string' &&
+    data.error.trim()
+  ) {
+    return data.error.trim()
+  }
+
+  return `Parser request failed (${status})`
+}
+
+async function invokeParseMenuFunction(params: {
+  accessToken: string
+  body: Record<string, unknown>
+}): Promise<ParseFunctionResult> {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+  if (!supabaseUrl || !anonKey) {
+    return {
+      status: 0,
+      data: null,
+      errorMessage: 'Supabase client environment is not configured.',
+    }
+  }
+
+  try {
+    const response = await fetch(`${supabaseUrl}/functions/v1/parse-menu`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: anonKey,
+        Authorization: `Bearer ${params.accessToken}`,
+      },
+      body: JSON.stringify(params.body),
+    })
+
+    let data: unknown | null = null
+    try {
+      data = await response.json()
+    } catch {
+      data = null
+    }
+
+    if (!response.ok) {
+      return {
+        status: response.status,
+        data,
+        errorMessage: extractFunctionErrorMessage(data, response.status),
+      }
+    }
+
+    return {
+      status: response.status,
+      data,
+      errorMessage: null,
+    }
+  } catch (error) {
+    return {
+      status: 0,
+      data: null,
+      errorMessage: error instanceof Error ? error.message : 'Failed to reach parser service',
+    }
+  }
+}
+
+async function getFreshAccessToken(supabase: ReturnType<typeof createClient>): Promise<string | null> {
+  const {
+    data: { session: initialSession },
+    error: initialSessionError,
+  } = await supabase.auth.getSession()
+
+  if (initialSessionError) {
+    return null
+  }
+
+  const nowSeconds = Math.floor(Date.now() / 1000)
+  const expiresAt = initialSession?.expires_at ?? null
+  const needsRefresh = !initialSession?.access_token || (typeof expiresAt === 'number' && expiresAt <= nowSeconds + 30)
+
+  if (!needsRefresh && initialSession?.access_token) {
+    const { data: userData, error: userError } = await supabase.auth.getUser(initialSession.access_token)
+    if (!userError && userData.user) {
+      return initialSession.access_token
+    }
+  }
+
+  const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession()
+  if (refreshError || !refreshData.session?.access_token) {
+    return null
+  }
+
+  return refreshData.session.access_token
+}
+
+async function forceRefreshAccessToken(supabase: ReturnType<typeof createClient>): Promise<string | null> {
+  const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession()
+  if (refreshError || !refreshData.session?.access_token) {
+    return null
+  }
+  return refreshData.session.access_token
+}
+
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 
 function isSupportedMenuFile(file: File): boolean {
@@ -186,27 +298,48 @@ export default function MenuUploadPage() {
         uploadId = uploadRow.id
 
         const mimeType = file.type || 'application/octet-stream'
-
-        const { data, error: invokeError } = await supabase.functions.invoke('parse-menu', {
-          body: {
-            uploadId,
-            filePath,
-            fileName: file.name,
-            mimeType,
-          },
-        })
-
-        const parserError =
-          typeof data === 'object' &&
-          data !== null &&
-          'error' in data &&
-          typeof data.error === 'string'
-            ? data.error
-            : null
-
-        if (invokeError) {
-          throw new Error(parserError ?? invokeError.message)
+        const invokeBody = {
+          uploadId,
+          filePath,
+          fileName: file.name,
+          mimeType,
         }
+        const anonToken = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? ''
+
+        let result: ParseFunctionResult | null = null
+        const initialAccessToken = await getFreshAccessToken(supabase)
+        if (initialAccessToken) {
+          result = await invokeParseMenuFunction({
+            accessToken: initialAccessToken,
+            body: invokeBody,
+          })
+        }
+
+        if (result?.status === 401) {
+          const retryAccessToken = await forceRefreshAccessToken(supabase)
+          if (retryAccessToken) {
+            result = await invokeParseMenuFunction({
+              accessToken: retryAccessToken,
+              body: invokeBody,
+            })
+          }
+        }
+
+        if (!result || result.status === 401) {
+          if (!anonToken) {
+            throw new Error('Your admin session expired. Sign in again, then retry upload.')
+          }
+          result = await invokeParseMenuFunction({
+            accessToken: anonToken,
+            body: invokeBody,
+          })
+        }
+
+        if (result.status < 200 || result.status >= 300) {
+          throw new Error(result.errorMessage ?? 'Failed to parse menu')
+        }
+
+        const data = result.data
 
         const payload = data as ParseMenuResponse | null
         if (!payload || !Array.isArray(payload.categories) || !Array.isArray(payload.items)) {
