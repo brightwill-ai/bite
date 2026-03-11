@@ -35,7 +35,6 @@ type ParseRequest = {
   fileName?: string
   mimeType?: string
   rawText?: string
-  fileData?: string
 }
 
 type DeterministicParseResult = {
@@ -49,10 +48,106 @@ type StoredUpload = {
   contentType: string
 }
 
+type PositionedPdfEntry = {
+  str: string
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+type PositionedPdfLine = {
+  y: number
+  entries: PositionedPdfEntry[]
+}
+
+type InlinePriceMatch = {
+  prefix: string
+  price: string
+}
+
 type CategoryHeadingMatch = {
   name: string
   endIndex: number
 }
+
+type UploadKind = 'pdf' | 'image' | 'text' | 'unknown'
+
+type ParsedFromClaude = {
+  menu: ParsedMenu
+  inputItems: number
+  droppedItems: number
+  lowConfidence: boolean
+}
+
+type ParsedMenuCandidate = {
+  menu: ParsedMenu
+  warning: string | null
+}
+
+type AnthropicConfig = {
+  apiKey: string
+  model: string
+  timeoutMs: number
+}
+
+const ANTHROPIC_API_BASE = 'https://api.anthropic.com'
+const ANTHROPIC_VERSION = '2023-06-01'
+const ANTHROPIC_FILES_BETA = 'files-api-2025-04-14'
+const DEFAULT_ANTHROPIC_MODEL = 'claude-haiku-4-5'
+const FALLBACK_ANTHROPIC_MODEL = 'claude-sonnet-4-20250514'
+const DEFAULT_ANTHROPIC_TIMEOUT_MS = 25_000
+const RETRY_BACKOFF_MS = 700
+
+const MAX_SYNC_UPLOAD_BYTES = 20 * 1024 * 1024
+const MIN_TEXT_LENGTH_FOR_DETERMINISTIC = 20
+
+const MENU_OUTPUT_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    confidence: {
+      type: 'number',
+    },
+    categories: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          name: { type: 'string' },
+          display_order: { type: 'integer' },
+        },
+        required: ['name'],
+      },
+    },
+    items: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          name: { type: 'string' },
+          description: { type: 'string' },
+          price: { type: 'number' },
+          category_name: { type: 'string' },
+          category_index: { type: 'integer' },
+          emoji: { type: 'string' },
+          is_popular: { type: 'boolean' },
+          is_new: { type: 'boolean' },
+          needs_review: { type: 'boolean' },
+        },
+        required: ['name', 'price'],
+      },
+    },
+  },
+  required: ['categories', 'items'],
+}
+
+const CLAUDE_PARSE_PROMPT =
+  'Parse this menu file into categories and items. Keep names concise, include prices as numbers, and set needs_review=true when uncertain.'
+const CLAUDE_JSON_ONLY_PROMPT =
+  'Return only JSON with keys confidence, categories, and items. Do not add markdown or prose.'
 
 const KNOWN_CATEGORY_WORDS = new Set([
   'appetizer',
@@ -107,28 +202,38 @@ function toString(value: unknown): string {
   return typeof value === 'string' ? value : ''
 }
 
-function toBoolean(value: unknown, fallback = false): boolean {
-  return typeof value === 'boolean' ? value : fallback
-}
-
-function toNumber(value: unknown, fallback = 0): number {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return value
-  }
-  if (typeof value === 'string') {
-    const parsed = Number.parseFloat(value)
-    if (Number.isFinite(parsed)) {
-      return parsed
-    }
-  }
-  return fallback
-}
-
 function normalizeInlineText(value: string): string {
   return value
     .replace(/\r/g, '\n')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+function isLikelyCorruptedText(value: string): boolean {
+  const normalized = normalizeInlineText(value)
+  if (normalized.length < 80) {
+    return false
+  }
+
+  const compact = normalized.replace(/\s+/g, '')
+  if (!compact) {
+    return false
+  }
+
+  const suspiciousChars = compact.match(/[^A-Za-z0-9$.,&'()\-/:+%]/g) ?? []
+  const symbolRatio = suspiciousChars.length / compact.length
+
+  const longNoisyTokens = normalized
+    .split(' ')
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 18)
+    .filter((token) => {
+      const letterCount = (token.match(/[A-Za-z]/g) ?? []).length
+      const suspiciousCount = (token.match(/[^A-Za-z0-9$.,&'()\-/:+%]/g) ?? []).length
+      return suspiciousCount / token.length > 0.25 || letterCount / token.length < 0.35
+    })
+
+  return symbolRatio > 0.2 || longNoisyTokens.length >= 2
 }
 
 function startsWithUppercase(token: string): boolean {
@@ -382,75 +487,164 @@ function withAllItemsNeedingReview(menu: ParsedMenu): ParsedMenu {
   }
 }
 
+function toPositivePrice(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return Number.parseFloat(value.toFixed(2))
+  }
+
+  if (typeof value !== 'string') {
+    return null
+  }
+
+  const normalized = value.replace(/[^0-9.]/g, '').trim()
+  if (!normalized) {
+    return null
+  }
+
+  const parsed = Number.parseFloat(normalized)
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null
+  }
+
+  return Number.parseFloat(parsed.toFixed(2))
+}
+
+function toOptionalBoolean(value: unknown): boolean | undefined {
+  if (typeof value === 'boolean') {
+    return value
+  }
+  return undefined
+}
+
+function toOptionalInteger(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isInteger(value) && value >= 0) {
+    return value
+  }
+  if (typeof value !== 'string' || !/^\d+$/.test(value.trim())) {
+    return undefined
+  }
+  const parsed = Number.parseInt(value, 10)
+  return Number.isInteger(parsed) ? parsed : undefined
+}
+
+function normalizeItemName(value: unknown): string {
+  return toString(value).replace(/\s+/g, ' ').trim()
+}
+
+function normalizeDescription(value: unknown): string | undefined {
+  const description = toString(value).replace(/\s+/g, ' ').trim()
+  return description || undefined
+}
+
+function normalizeEmoji(value: unknown): string | undefined {
+  const emoji = toString(value).trim()
+  if (!emoji || emoji.length > 8) {
+    return undefined
+  }
+  return emoji
+}
+
+function toOptionalConfidence(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return null
+  }
+  if (value < 0 || value > 1) {
+    return null
+  }
+  return value
+}
+
+function inferUploadKind(params: {
+  fileName?: string
+  filePath?: string
+  mimeType?: string
+}): UploadKind {
+  const mimeType = params.mimeType?.toLowerCase() ?? ''
+  if (mimeType.includes('pdf')) {
+    return 'pdf'
+  }
+  if (mimeType.startsWith('image/')) {
+    return 'image'
+  }
+  if (mimeType.startsWith('text/')) {
+    return 'text'
+  }
+
+  const suffix = `${params.filePath ?? ''} ${params.fileName ?? ''}`.toLowerCase()
+  if (suffix.match(/\.pdf(\?|$)/)) {
+    return 'pdf'
+  }
+  if (suffix.match(/\.(png|jpg|jpeg|webp|gif|bmp|tif|tiff)(\?|$)/)) {
+    return 'image'
+  }
+  if (suffix.match(/\.txt(\?|$)/)) {
+    return 'text'
+  }
+
+  return 'unknown'
+}
+
+function isSupportedUploadKind(kind: UploadKind): boolean {
+  return kind === 'pdf' || kind === 'image' || kind === 'text'
+}
+
+function getAnthropicConfig(): AnthropicConfig {
+  const apiKey = Deno.env.get('ANTHROPIC_API_KEY')?.trim() ?? ''
+  const configuredModel = Deno.env.get('ANTHROPIC_MODEL')?.trim() ?? ''
+  const timeoutRaw = Deno.env.get('ANTHROPIC_TIMEOUT_MS')?.trim() ?? ''
+  const parsedTimeout = Number.parseInt(timeoutRaw, 10)
+
+  return {
+    apiKey,
+    model: configuredModel || DEFAULT_ANTHROPIC_MODEL,
+    timeoutMs:
+      Number.isFinite(parsedTimeout) && parsedTimeout >= 5_000
+        ? parsedTimeout
+        : DEFAULT_ANTHROPIC_TIMEOUT_MS,
+  }
+}
+
+function buildDeterministicCandidate(rawText: string): ParsedMenuCandidate | null {
+  const normalizedRawText = rawText.trim()
+  if (!normalizedRawText || normalizedRawText.length < MIN_TEXT_LENGTH_FOR_DETERMINISTIC) {
+    return null
+  }
+
+  if (isLikelyCorruptedText(normalizedRawText)) {
+    return null
+  }
+
+  const deterministicResult = parseMenuDeterministically(normalizedRawText)
+  if (deterministicResult.menu.items.length === 0) {
+    return null
+  }
+
+  if (shouldUseDeterministicResult(deterministicResult)) {
+    return {
+      menu: deterministicResult.menu,
+      warning: null,
+    }
+  }
+
+  return {
+    menu: withAllItemsNeedingReview(deterministicResult.menu),
+    warning: 'Deterministic parser confidence is low. Review menu manually.',
+  }
+}
+
+function withFallbackWarning(message: string, fallback: ParsedMenuCandidate): string {
+  if (!fallback.warning) {
+    return message
+  }
+  return `${message} ${fallback.warning}`
+}
+
 function isImageMimeType(value: string | undefined): boolean {
   return !!value && value.toLowerCase().startsWith('image/')
 }
 
 function isImagePath(value: string): boolean {
   return /\.(png|jpg|jpeg|webp|gif|bmp|tif|tiff)$/i.test(value)
-}
-
-function normalizeParsedMenu(raw: unknown): ParsedMenu {
-  if (!isRecord(raw)) {
-    return {
-      categories: [{ name: 'Uncategorized', display_order: 1 }],
-      items: [],
-    }
-  }
-
-  const rawCategories = Array.isArray(raw.categories) ? raw.categories : []
-  const rawItems = Array.isArray(raw.items) ? raw.items : []
-
-  const categories: ParsedCategory[] = rawCategories
-    .map((category, index) => {
-      if (!isRecord(category)) {
-        return null
-      }
-      const name = toString(category.name).trim()
-      if (!name) {
-        return null
-      }
-      return {
-        name,
-        display_order: toNumber(category.display_order, index + 1),
-      }
-    })
-    .filter((category): category is ParsedCategory => category !== null)
-
-  const safeCategories = categories.length > 0 ? categories : [{ name: 'Uncategorized', display_order: 1 }]
-
-  const items: ParsedItem[] = rawItems
-    .map((item) => {
-      if (!isRecord(item)) {
-        return null
-      }
-
-      const name = toString(item.name).trim()
-      const price = toNumber(item.price, NaN)
-      if (!name || !Number.isFinite(price)) {
-        return null
-      }
-
-      return {
-        name,
-        description: toString(item.description).trim() || undefined,
-        price,
-        category_name: toString(item.category_name).trim() || undefined,
-        category_index: Number.isFinite(toNumber(item.category_index, NaN))
-          ? toNumber(item.category_index, NaN)
-          : undefined,
-        emoji: toString(item.emoji).trim() || undefined,
-        is_popular: toBoolean(item.is_popular),
-        is_new: toBoolean(item.is_new),
-        needs_review: toBoolean(item.needs_review),
-      }
-    })
-    .filter((item): item is ParsedItem => item !== null)
-
-  return {
-    categories: safeCategories,
-    items,
-  }
 }
 
 function createAdminClient(): SupabaseClient {
@@ -466,11 +660,11 @@ function createAdminClient(): SupabaseClient {
 }
 
 async function markUpload(
-  admin: SupabaseClient,
+  admin: SupabaseClient | null,
   uploadId: string | undefined,
   payload: { status: 'processing' | 'completed' | 'failed'; parsed_data?: unknown; error_message?: string | null }
 ) {
-  if (!uploadId) {
+  if (!admin || !uploadId) {
     return
   }
 
@@ -480,12 +674,290 @@ async function markUpload(
     .eq('id', uploadId)
 }
 
+function buildEmptyMenu(): ParsedMenu {
+  return {
+    categories: [{ name: 'Uncategorized', display_order: 1 }],
+    items: [],
+  }
+}
+
+function median(values: number[]): number {
+  if (values.length === 0) {
+    return 0
+  }
+
+  const sorted = [...values].sort((a, b) => a - b)
+  const middle = Math.floor(sorted.length / 2)
+  if (sorted.length % 2 === 0) {
+    return (sorted[middle - 1] + sorted[middle]) / 2
+  }
+  return sorted[middle]
+}
+
+function toPositionedPdfEntry(item: unknown): PositionedPdfEntry | null {
+  if (!isRecord(item) || typeof item.str !== 'string') {
+    return null
+  }
+
+  const str = item.str.replace(/\s+/g, ' ').trim()
+  if (!str) {
+    return null
+  }
+
+  const transform = item.transform
+  if (
+    !Array.isArray(transform) ||
+    transform.length < 6 ||
+    typeof transform[4] !== 'number' ||
+    typeof transform[5] !== 'number'
+  ) {
+    return null
+  }
+
+  const width = typeof item.width === 'number' && Number.isFinite(item.width)
+    ? item.width
+    : Math.max(str.length * 3, 1)
+  const height = typeof item.height === 'number' && Number.isFinite(item.height)
+    ? item.height
+    : 0
+
+  return {
+    str,
+    x: transform[4],
+    y: transform[5],
+    width,
+    height,
+  }
+}
+
+function joinPdfLineEntries(entries: PositionedPdfEntry[]): string {
+  const sorted = [...entries].sort((a, b) => a.x - b.x)
+  let output = ''
+  let previousRightEdge: number | null = null
+
+  for (const entry of sorted) {
+    if (!entry.str) {
+      continue
+    }
+
+    if (!output) {
+      output = entry.str
+      previousRightEdge = entry.x + Math.max(entry.width, entry.str.length * 3)
+      continue
+    }
+
+    const gap = previousRightEdge === null ? entry.x : entry.x - previousRightEdge
+    const needsSpace = gap > 1 && !output.endsWith('-')
+    output += `${needsSpace ? ' ' : ''}${entry.str}`
+    previousRightEdge = Math.max(previousRightEdge ?? 0, entry.x + Math.max(entry.width, entry.str.length * 3))
+  }
+
+  return output.trim()
+}
+
+function isLikelyHeadingLine(value: string): boolean {
+  const cleaned = value
+    .replace(/^n\s+/i, '')
+    .replace(/[^A-Za-z&/\- ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (!cleaned) {
+    return false
+  }
+
+  const words = cleaned.split(' ')
+  if (words.length === 0 || words.length > 4) {
+    return false
+  }
+
+  const letters = cleaned.replace(/[^A-Za-z]/g, '')
+  return !!letters && letters === letters.toUpperCase()
+}
+
+function isTagLine(value: string): boolean {
+  return /^\[[^\]]+\]$/.test(value.trim())
+}
+
+function isStandalonePriceLine(value: string): boolean {
+  return /^\$\s*\d{1,3}(?:\.\d{2})?$/.test(value.trim())
+}
+
+function looksLikeDescriptionLine(value: string): boolean {
+  const line = value.trim()
+  if (!line || line.includes('$')) {
+    return false
+  }
+  if (isStandalonePriceLine(line) || isLikelyHeadingLine(line) || isTagLine(line)) {
+    return false
+  }
+
+  if (/^[a-z]/.test(line)) {
+    return true
+  }
+  if (line.includes(',')) {
+    return true
+  }
+
+  const words = line.split(/\s+/).filter(Boolean)
+  if (words.length >= 5) {
+    return true
+  }
+
+  return words.length >= 2 && words.some((word) => /^[a-z]/.test(word))
+}
+
+function extractTrailingPrice(value: string): InlinePriceMatch | null {
+  const match = value.trim().match(/^(.*?)(\$\s*\d{1,3}(?:\.\d{2})?)$/)
+  if (!match) {
+    return null
+  }
+
+  const prefix = match[1]?.trim() ?? ''
+  if (!prefix) {
+    return null
+  }
+
+  return {
+    prefix,
+    price: match[2].replace(/\s+/g, ''),
+  }
+}
+
+function repositionPriceLines(lines: string[]): string[] {
+  const movedStandalone = [...lines]
+  const removeIndexes = new Set<number>()
+
+  for (let index = 0; index < movedStandalone.length; index += 1) {
+    const current = movedStandalone[index]?.trim() ?? ''
+    if (!isStandalonePriceLine(current)) {
+      continue
+    }
+
+    let target = index + 1
+    while (target < movedStandalone.length) {
+      const candidate = movedStandalone[target]?.trim() ?? ''
+      if (!candidate) {
+        target += 1
+        continue
+      }
+      if (isLikelyHeadingLine(candidate) || isTagLine(candidate)) {
+        target += 1
+        continue
+      }
+      break
+    }
+
+    if (target >= movedStandalone.length) {
+      continue
+    }
+
+    let blockEnd = target
+    while (blockEnd + 1 < movedStandalone.length && looksLikeDescriptionLine(movedStandalone[blockEnd + 1] ?? '')) {
+      blockEnd += 1
+    }
+
+    movedStandalone[blockEnd] = `${movedStandalone[blockEnd]} ${current}`.trim()
+    removeIndexes.add(index)
+  }
+
+  const withStandaloneRepositioned = movedStandalone
+    .filter((_, index) => !removeIndexes.has(index))
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  for (let index = 0; index < withStandaloneRepositioned.length; index += 1) {
+    const match = extractTrailingPrice(withStandaloneRepositioned[index] ?? '')
+    if (!match) {
+      continue
+    }
+
+    const nextLine = withStandaloneRepositioned[index + 1] ?? ''
+    if (!looksLikeDescriptionLine(nextLine)) {
+      continue
+    }
+
+    let blockEnd = index + 1
+    while (
+      blockEnd + 1 < withStandaloneRepositioned.length &&
+      looksLikeDescriptionLine(withStandaloneRepositioned[blockEnd + 1] ?? '')
+    ) {
+      blockEnd += 1
+    }
+
+    withStandaloneRepositioned[index] = match.prefix
+    withStandaloneRepositioned[blockEnd] = `${withStandaloneRepositioned[blockEnd]} ${match.price}`.trim()
+  }
+
+  return withStandaloneRepositioned
+    .map((line) => line.trim())
+    .filter(Boolean)
+}
+
+function reconstructTextFromPdfItems(items: unknown[]): string {
+  const positionedEntries = items
+    .map((item) => toPositionedPdfEntry(item))
+    .filter((entry): entry is PositionedPdfEntry => entry !== null)
+
+  if (positionedEntries.length === 0) {
+    return items
+      .map((item) => {
+        if (isRecord(item) && typeof item.str === 'string') {
+          return item.str
+        }
+        return ''
+      })
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+  }
+
+  const heights = positionedEntries
+    .map((entry) => entry.height)
+    .filter((height) => height > 0)
+  const medianHeight = heights.length > 0 ? median(heights) : 10
+  const lineTolerance = Math.max(2, Math.min(6, medianHeight * 0.45))
+
+  const sortedEntries = [...positionedEntries].sort((a, b) => (b.y - a.y) || (a.x - b.x))
+  const lines: PositionedPdfLine[] = []
+
+  for (const entry of sortedEntries) {
+    let bestLineIndex = -1
+    let bestDistance = Number.POSITIVE_INFINITY
+
+    for (let index = 0; index < lines.length; index += 1) {
+      const distance = Math.abs(lines[index].y - entry.y)
+      if (distance <= lineTolerance && distance < bestDistance) {
+        bestLineIndex = index
+        bestDistance = distance
+      }
+    }
+
+    if (bestLineIndex === -1) {
+      lines.push({ y: entry.y, entries: [entry] })
+      continue
+    }
+
+    lines[bestLineIndex].entries.push(entry)
+  }
+
+  const lineTexts = lines
+    .sort((a, b) => b.y - a.y)
+    .map((line) => joinPdfLineEntries(line.entries))
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  return repositionPriceLines(lineTexts).join('\n')
+}
+
 async function extractPdfText(bytes: Uint8Array): Promise<string> {
   try {
-    const pdfjs = await import('https://esm.sh/pdfjs-dist@4.10.38/legacy/build/pdf.mjs')
+    const pdfjs = await import('https://esm.sh/pdfjs-dist@5.5.207/legacy/build/pdf.mjs')
     const task = pdfjs.getDocument({
       data: bytes,
-      disableWorker: true,
+      cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.5.207/cmaps/',
+      cMapPacked: true,
+      standardFontDataUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.5.207/standard_fonts/',
       useSystemFonts: true,
     })
     const pdf = await task.promise
@@ -494,15 +966,7 @@ async function extractPdfText(bytes: Uint8Array): Promise<string> {
     for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
       const page = await pdf.getPage(pageNumber)
       const textContent = await page.getTextContent()
-      const text = textContent.items
-        .map((item: unknown) => {
-          if (isRecord(item) && typeof item.str === 'string') {
-            return item.str
-          }
-          return ''
-        })
-        .join(' ')
-      pageTexts.push(text)
+      pageTexts.push(reconstructTextFromPdfItems(textContent.items))
     }
 
     return pageTexts.join('\n')
@@ -536,225 +1000,535 @@ async function extractTextFromStoredUpload(params: {
 }): Promise<string> {
   const contentType = params.mimeType?.toLowerCase() || params.upload.contentType || ''
   const isPdf = contentType.includes('pdf') || params.filePath.toLowerCase().endsWith('.pdf')
+  const isImage = isImageMimeType(contentType) || isImagePath(params.filePath)
 
   if (isPdf) {
     const extractedPdfText = await extractPdfText(params.upload.bytes)
     if (extractedPdfText.trim().length > 0) {
       return extractedPdfText
     }
+    return ''
+  }
+
+  if (isImage) {
+    return ''
   }
 
   return new TextDecoder().decode(params.upload.bytes)
 }
 
-function bytesToBase64(bytes: Uint8Array): string {
-  const chunkSize = 0x8000
-  let binary = ''
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    const chunk = bytes.subarray(index, index + chunkSize)
-    binary += String.fromCharCode(...chunk)
-  }
-  return btoa(binary)
-}
-
-function extractJsonText(value: string): string {
-  const fenced = value.match(/```(?:json)?\s*([\s\S]*?)```/i)
-  if (fenced && fenced[1]) {
-    return fenced[1].trim()
-  }
-
-  const firstBrace = value.indexOf('{')
-  const lastBrace = value.lastIndexOf('}')
-  if (firstBrace !== -1 && lastBrace > firstBrace) {
-    return value.slice(firstBrace, lastBrace + 1).trim()
-  }
-
-  return value.trim()
-}
-
-async function parseWithClaude(params: {
-  apiKey: string
-  fileName: string
-  rawText: string
-  fileData?: string
-  mimeType?: string
-}): Promise<ParsedMenu> {
-  const isImage = params.mimeType?.startsWith('image/')
-
-  type TextBlock = { type: 'text'; text: string }
-  type ImageBlock = { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
-  type ContentBlock = TextBlock | ImageBlock
-
-  let userContent: string | ContentBlock[]
-
-  if (isImage && params.fileData && params.mimeType) {
-    userContent = [
-      {
-        type: 'image',
-        source: { type: 'base64', media_type: params.mimeType, data: params.fileData },
-      },
-      {
-        type: 'text',
-        text: `File: ${params.fileName}\n\nParse the restaurant menu visible in this image.`,
-      },
-    ]
-  } else {
-    userContent = `File: ${params.fileName}\n\nMenu text:\n${params.rawText.slice(0, 30000)}`
-  }
-
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'x-api-key': params.apiKey,
-      'anthropic-version': '2023-06-01',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'claude-3-5-sonnet-20241022',
-      max_tokens: 4000,
-      temperature: 0.1,
-      system:
-        'You parse restaurant menus into strict JSON with this shape: {"categories":[{"name":"string","display_order":number}],"items":[{"name":"string","description":"string","price":number,"category_name":"string","category_index":number,"emoji":"string","is_popular":boolean,"is_new":boolean,"needs_review":boolean}]}. Return JSON only, no markdown.',
-      messages: [{ role: 'user', content: userContent }],
-    }),
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms)
   })
+}
 
-  const payload = await response.json()
-  if (!response.ok) {
-    const errorMessage =
-      isRecord(payload) && isRecord(payload.error) && typeof payload.error.message === 'string'
-        ? payload.error.message
-        : 'Claude parser request failed'
-    throw new Error(errorMessage)
+function isRetryableStatus(status: number): boolean {
+  return status === 429 || status >= 500
+}
+
+function isTransientRequestError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false
+  }
+  return error.name === 'AbortError' || error instanceof TypeError
+}
+
+function buildModelCandidates(primaryModel: string): string[] {
+  const candidates = [primaryModel, DEFAULT_ANTHROPIC_MODEL, FALLBACK_ANTHROPIC_MODEL]
+  const unique: string[] = []
+
+  for (const candidate of candidates) {
+    const normalized = candidate.trim()
+    if (!normalized || unique.includes(normalized)) {
+      continue
+    }
+    unique.push(normalized)
   }
 
-  if (!isRecord(payload) || !Array.isArray(payload.content)) {
-    throw new Error('Claude parser returned an invalid payload')
-  }
+  return unique
+}
 
-  const textBlock = payload.content.find(
-    (block: unknown) => isRecord(block) && block.type === 'text' && typeof block.text === 'string'
+function isModelUnavailableError(message: string): boolean {
+  const lower = message.toLowerCase()
+  return (
+    (lower.includes('model') && lower.includes('not found')) ||
+    (lower.includes('model') && lower.includes('does not exist')) ||
+    (lower.includes('model') && lower.includes('retired')) ||
+    lower.includes('unsupported model')
   )
-
-  if (!isRecord(textBlock) || typeof textBlock.text !== 'string') {
-    throw new Error('Claude parser returned empty content')
-  }
-
-  const jsonText = extractJsonText(textBlock.text)
-  return normalizeParsedMenu(JSON.parse(jsonText))
 }
 
-async function parseWithOpenAi(params: {
-  apiKey: string
-  baseUrl: string
+function isStructuredOutputUnsupportedError(message: string): boolean {
+  const lower = message.toLowerCase()
+  return (
+    lower.includes('output format') ||
+    lower.includes('output_config') ||
+    lower.includes('json_schema')
+  )
+}
+
+function isStructuredOutputParsingError(message: string): boolean {
+  const lower = message.toLowerCase()
+  return (
+    lower.includes('structured menu output') ||
+    lower.includes('output schema could not be normalized')
+  )
+}
+
+function isAuthenticationError(message: string): boolean {
+  const lower = message.toLowerCase()
+  return (
+    lower.includes('api key') ||
+    lower.includes('authentication') ||
+    lower.includes('unauthorized')
+  )
+}
+
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs: number
+): Promise<Response> {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => {
+    controller.abort()
+  }, timeoutMs)
+
+  try {
+    return await fetch(input, {
+      ...init,
+      signal: controller.signal,
+    })
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
+async function readAnthropicErrorMessage(response: Response): Promise<string> {
+  const fallback = `Anthropic request failed (${response.status})`
+
+  try {
+    const payload = await response.json()
+    if (!isRecord(payload)) {
+      return fallback
+    }
+
+    const errorRecord = payload.error
+    if (isRecord(errorRecord) && typeof errorRecord.message === 'string') {
+      return errorRecord.message
+    }
+
+    return fallback
+  } catch {
+    return fallback
+  }
+}
+
+async function uploadFileToAnthropic(params: {
+  config: AnthropicConfig
+  upload: StoredUpload
   fileName: string
-  rawText: string
-  fileData?: string
   mimeType?: string
-}): Promise<ParsedMenu> {
-  const schema = {
-    name: 'menu_parse',
-    strict: true,
-    schema: {
-      type: 'object',
-      properties: {
-        categories: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              name: { type: 'string' },
-              display_order: { type: 'number' },
-            },
-            required: ['name'],
-            additionalProperties: false,
-          },
-        },
-        items: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              name: { type: 'string' },
-              description: { type: 'string' },
-              price: { type: 'number' },
-              category_name: { type: 'string' },
-              category_index: { type: 'number' },
-              emoji: { type: 'string' },
-              is_popular: { type: 'boolean' },
-              is_new: { type: 'boolean' },
-              needs_review: { type: 'boolean' },
-            },
-            required: ['name', 'price'],
-            additionalProperties: false,
-          },
-        },
-      },
-      required: ['categories', 'items'],
-      additionalProperties: false,
-    },
-  }
+}): Promise<string> {
+  const contentType = params.mimeType || params.upload.contentType || 'application/octet-stream'
+  const maxAttempts = 2
 
-  const isImage = params.mimeType?.startsWith('image/')
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      const body = new FormData()
+      body.append('file', new Blob([params.upload.bytes], { type: contentType }), params.fileName)
+      body.append('purpose', 'user_data')
 
-  type TextPart = { type: 'text'; text: string }
-  type ImagePart = { type: 'image_url'; image_url: { url: string } }
-  type UserContent = string | Array<TextPart | ImagePart>
-
-  let userContent: UserContent
-  if (isImage && params.fileData && params.mimeType) {
-    userContent = [
-      { type: 'image_url', image_url: { url: `data:${params.mimeType};base64,${params.fileData}` } },
-      { type: 'text', text: `File: ${params.fileName}\n\nParse the restaurant menu visible in this image.` },
-    ]
-  } else {
-    userContent = `File: ${params.fileName}\n\nMenu text:\n${params.rawText.slice(0, 30000)}`
-  }
-
-  const llmResponse = await fetch(`${params.baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${params.apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: Deno.env.get('OPENAI_MODEL') ?? 'gpt-4.1-mini',
-      temperature: 0.1,
-      response_format: {
-        type: 'json_schema',
-        json_schema: schema,
-      },
-      messages: [
+      const response = await fetchWithTimeout(
+        `${ANTHROPIC_API_BASE}/v1/files`,
         {
-          role: 'system',
-          content:
-            'You parse restaurant menus into structured JSON. Keep categories concise. Prices must be decimal numbers in dollars. If uncertain, include needs_review=true on that item.',
+          method: 'POST',
+          headers: {
+            'x-api-key': params.config.apiKey,
+            'anthropic-version': ANTHROPIC_VERSION,
+            'anthropic-beta': ANTHROPIC_FILES_BETA,
+          },
+          body,
         },
-        { role: 'user', content: userContent },
-      ],
-    }),
+        params.config.timeoutMs
+      )
+
+      if (!response.ok) {
+        const message = await readAnthropicErrorMessage(response)
+        if (attempt < maxAttempts - 1 && isRetryableStatus(response.status)) {
+          await wait(RETRY_BACKOFF_MS * (attempt + 1))
+          continue
+        }
+        throw new Error(message)
+      }
+
+      const payload = await response.json()
+      const fileId = isRecord(payload) && typeof payload.id === 'string' ? payload.id : ''
+      if (!fileId) {
+        throw new Error('Anthropic file upload did not return a file id')
+      }
+      return fileId
+    } catch (error) {
+      if (attempt < maxAttempts - 1 && isTransientRequestError(error)) {
+        await wait(RETRY_BACKOFF_MS * (attempt + 1))
+        continue
+      }
+      throw error
+    }
+  }
+
+  throw new Error('Anthropic file upload failed')
+}
+
+async function deleteAnthropicFile(config: AnthropicConfig, fileId: string): Promise<void> {
+  try {
+    await fetchWithTimeout(
+      `${ANTHROPIC_API_BASE}/v1/files/${fileId}`,
+      {
+        method: 'DELETE',
+        headers: {
+          'x-api-key': config.apiKey,
+          'anthropic-version': ANTHROPIC_VERSION,
+          'anthropic-beta': ANTHROPIC_FILES_BETA,
+        },
+      },
+      Math.min(10_000, config.timeoutMs)
+    )
+  } catch {
+    // Ignore cleanup failures.
+  }
+}
+
+function parseStructuredOutputText(value: string): unknown {
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return null
+  }
+
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    const withoutFence = trimmed
+      .replace(/^```json\s*/i, '')
+      .replace(/^```\s*/i, '')
+      .replace(/```$/i, '')
+      .trim()
+    if (!withoutFence) {
+      return null
+    }
+
+    try {
+      return JSON.parse(withoutFence)
+    } catch {
+      return null
+    }
+  }
+}
+
+function extractStructuredOutput(payload: unknown): unknown {
+  if (!isRecord(payload) || !Array.isArray(payload.content)) {
+    return null
+  }
+
+  for (const block of payload.content) {
+    if (!isRecord(block) || typeof block.type !== 'string') {
+      continue
+    }
+
+    if (block.type === 'output_json' && isRecord(block.json)) {
+      return block.json
+    }
+
+    if (block.type === 'text' && typeof block.text === 'string') {
+      const parsed = parseStructuredOutputText(block.text)
+      if (parsed !== null) {
+        return parsed
+      }
+    }
+  }
+
+  return null
+}
+
+function normalizeClaudeMenu(payload: unknown): ParsedFromClaude | null {
+  if (!isRecord(payload)) {
+    return null
+  }
+
+  const rawCategories = Array.isArray(payload.categories) ? payload.categories : []
+  const rawItems = Array.isArray(payload.items) ? payload.items : []
+
+  const categories: ParsedCategory[] = []
+  const categoryNameToIndex = new Map<string, number>()
+  const categoryNamesByOrder: string[] = []
+
+  const ensureCategory = (value: string): number => {
+    const normalizedName = normalizeCategoryName(value)
+    const key = normalizedName.toLowerCase()
+    const existingIndex = categoryNameToIndex.get(key)
+    if (typeof existingIndex === 'number') {
+      return existingIndex
+    }
+
+    const nextIndex = categories.length
+    categories.push({
+      name: normalizedName,
+      display_order: nextIndex + 1,
+    })
+    categoryNameToIndex.set(key, nextIndex)
+    categoryNamesByOrder[nextIndex] = normalizedName
+    return nextIndex
+  }
+
+  for (const category of rawCategories) {
+    if (!isRecord(category)) {
+      continue
+    }
+    const name = normalizeItemName(category.name)
+    if (!name) {
+      continue
+    }
+    ensureCategory(name)
+  }
+
+  if (categories.length === 0) {
+    ensureCategory('Uncategorized')
+  }
+
+  const items: ParsedItem[] = []
+  let droppedItems = 0
+
+  for (const rawItem of rawItems) {
+    if (!isRecord(rawItem)) {
+      droppedItems += 1
+      continue
+    }
+
+    const name = normalizeItemName(rawItem.name)
+    const price = toPositivePrice(rawItem.price)
+    if (!name || name.length < 2 || price === null) {
+      droppedItems += 1
+      continue
+    }
+
+    const requestedCategoryName = normalizeItemName(rawItem.category_name)
+    const requestedCategoryIndex = toOptionalInteger(rawItem.category_index)
+
+    let resolvedCategoryName = requestedCategoryName
+    if (!resolvedCategoryName && typeof requestedCategoryIndex === 'number') {
+      resolvedCategoryName = categoryNamesByOrder[requestedCategoryIndex] ?? ''
+    }
+    if (!resolvedCategoryName) {
+      resolvedCategoryName = 'Uncategorized'
+    }
+
+    const resolvedCategoryIndex = ensureCategory(resolvedCategoryName)
+
+    items.push({
+      name,
+      description: normalizeDescription(rawItem.description),
+      price,
+      category_name: categories[resolvedCategoryIndex]?.name,
+      category_index: resolvedCategoryIndex,
+      emoji: normalizeEmoji(rawItem.emoji),
+      is_popular: toOptionalBoolean(rawItem.is_popular) ?? false,
+      is_new: toOptionalBoolean(rawItem.is_new) ?? false,
+      needs_review: toOptionalBoolean(rawItem.needs_review) ?? false,
+    })
+  }
+
+  const confidence = toOptionalConfidence(payload.confidence)
+  const dropRatio = rawItems.length > 0 ? droppedItems / rawItems.length : 0
+  const lowConfidence =
+    (confidence !== null && confidence < 0.65) ||
+    dropRatio > 0.35 ||
+    (items.length > 0 && items.length <= 2 && rawItems.length >= 4)
+
+  const normalizedMenu: ParsedMenu = {
+    categories: categories.map((category, index) => ({
+      name: category.name,
+      display_order: index + 1,
+    })),
+    items: lowConfidence
+      ? items.map((item) => ({
+          ...item,
+          needs_review: true,
+        }))
+      : items,
+  }
+
+  return {
+    menu: normalizedMenu,
+    inputItems: rawItems.length,
+    droppedItems,
+    lowConfidence,
+  }
+}
+
+async function parseMenuWithClaude(params: {
+  config: AnthropicConfig
+  upload: StoredUpload
+  fileName: string
+  mimeType?: string
+  uploadKind: UploadKind
+}): Promise<ParsedFromClaude> {
+  const fileId = await uploadFileToAnthropic({
+    config: params.config,
+    upload: params.upload,
+    fileName: params.fileName,
+    mimeType: params.mimeType,
   })
 
-  const llmData = await llmResponse.json()
-  if (!llmResponse.ok) {
-    const errorMessage =
-      isRecord(llmData) && isRecord(llmData.error) && typeof llmData.error.message === 'string'
-        ? llmData.error.message
-        : 'OpenAI parser request failed'
-    throw new Error(errorMessage)
-  }
+  try {
+    const contentBlock = params.uploadKind === 'image'
+      ? { type: 'image', source: { type: 'file', file_id: fileId } }
+      : { type: 'document', source: { type: 'file', file_id: fileId } }
+    const callClaude = async (model: string, useStructuredOutput: boolean): Promise<ParsedFromClaude> => {
+      const maxAttempts = 2
 
-  if (
-    !isRecord(llmData) ||
-    !Array.isArray(llmData.choices) ||
-    !isRecord(llmData.choices[0]) ||
-    !isRecord(llmData.choices[0].message) ||
-    typeof llmData.choices[0].message.content !== 'string'
-  ) {
-    throw new Error('OpenAI parser returned empty content')
-  }
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        try {
+          const userPrompt = useStructuredOutput
+            ? CLAUDE_PARSE_PROMPT
+            : `${CLAUDE_PARSE_PROMPT} ${CLAUDE_JSON_ONLY_PROMPT}`
 
-  return normalizeParsedMenu(JSON.parse(llmData.choices[0].message.content))
+          const requestBody: Record<string, unknown> = {
+            model,
+            max_tokens: 4096,
+            system: 'You extract structured restaurant menu data from uploaded files.',
+            messages: [
+              {
+                role: 'user',
+                content: [
+                  contentBlock,
+                  { type: 'text', text: userPrompt },
+                ],
+              },
+            ],
+          }
+
+          if (useStructuredOutput) {
+            requestBody.output_config = {
+              format: {
+                type: 'json_schema',
+                schema: MENU_OUTPUT_SCHEMA,
+              },
+            }
+          }
+
+          const response = await fetchWithTimeout(
+            `${ANTHROPIC_API_BASE}/v1/messages`,
+            {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'x-api-key': params.config.apiKey,
+                'anthropic-version': ANTHROPIC_VERSION,
+                'anthropic-beta': ANTHROPIC_FILES_BETA,
+              },
+              body: JSON.stringify(requestBody),
+            },
+            params.config.timeoutMs
+          )
+
+          if (!response.ok) {
+            const message = await readAnthropicErrorMessage(response)
+            if (attempt < maxAttempts - 1 && isRetryableStatus(response.status)) {
+              await wait(RETRY_BACKOFF_MS * (attempt + 1))
+              continue
+            }
+            throw new Error(message)
+          }
+
+          const payload = await response.json()
+          const extracted = extractStructuredOutput(payload)
+          if (!extracted) {
+            throw new Error('Claude response did not contain structured menu output')
+          }
+
+          const normalized = normalizeClaudeMenu(extracted)
+          if (!normalized) {
+            throw new Error('Claude output schema could not be normalized')
+          }
+
+          return normalized
+        } catch (error) {
+          if (attempt < maxAttempts - 1 && isTransientRequestError(error)) {
+            await wait(RETRY_BACKOFF_MS * (attempt + 1))
+            continue
+          }
+          throw error
+        }
+      }
+
+      throw new Error('Claude parsing failed after retry')
+    }
+
+    const candidateModels = buildModelCandidates(params.config.model)
+    let lastError: Error | null = null
+
+    for (const model of candidateModels) {
+      try {
+        return await callClaude(model, true)
+      } catch (structuredError) {
+        const normalizedStructuredError =
+          structuredError instanceof Error
+            ? structuredError
+            : new Error('Claude parsing failed')
+        lastError = normalizedStructuredError
+
+        if (isAuthenticationError(normalizedStructuredError.message)) {
+          throw normalizedStructuredError
+        }
+
+        if (isModelUnavailableError(normalizedStructuredError.message)) {
+          continue
+        }
+
+        if (
+          isStructuredOutputUnsupportedError(normalizedStructuredError.message) ||
+          isStructuredOutputParsingError(normalizedStructuredError.message)
+        ) {
+          try {
+            return await callClaude(model, false)
+          } catch (jsonError) {
+            const normalizedJsonError =
+              jsonError instanceof Error
+                ? jsonError
+                : new Error('Claude parsing failed')
+            lastError = normalizedJsonError
+
+            if (isAuthenticationError(normalizedJsonError.message)) {
+              throw normalizedJsonError
+            }
+
+            if (isModelUnavailableError(normalizedJsonError.message)) {
+              continue
+            }
+          }
+        }
+      }
+    }
+
+    throw lastError ?? new Error('Claude parsing failed')
+  } finally {
+    await deleteAnthropicFile(params.config, fileId)
+  }
+}
+
+async function completeWithMenu(params: {
+  admin: SupabaseClient | null
+  uploadId?: string
+  menu: ParsedMenu
+  errorMessage: string | null
+}): Promise<Response> {
+  await markUpload(params.admin, params.uploadId, {
+    status: 'completed',
+    parsed_data: params.menu,
+    error_message: params.errorMessage,
+  })
+  return jsonResponse(params.menu)
 }
 
 Deno.serve(async (request: Request) => {
@@ -773,165 +1547,225 @@ Deno.serve(async (request: Request) => {
     return jsonResponse({ error: 'Invalid JSON payload' }, 400)
   }
 
-  let admin: SupabaseClient
+  let admin: SupabaseClient | null = null
   try {
     admin = createAdminClient()
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Parser is not configured'
-    return jsonResponse({ error: message }, 500)
+  } catch {
+    admin = null
   }
 
   const uploadId = body.uploadId
-  const fileName = body.fileName ?? 'menu file'
+  const fileName = toString(body.fileName) || 'menu file'
   const filePath = toString(body.filePath)
-  let fileData = toString(body.fileData).trim() || undefined
   let mimeType = toString(body.mimeType).trim().toLowerCase() || undefined
+  let rawText = toString(body.rawText).trim()
 
   await markUpload(admin, uploadId, { status: 'processing', error_message: null })
 
-  let rawText = toString(body.rawText).trim()
-  let deterministicResult: DeterministicParseResult | null = null
+  const uploadKind = inferUploadKind({
+    fileName,
+    filePath,
+    mimeType,
+  })
 
-  const inputLooksLikeImage = () =>
-    isImageMimeType(mimeType) || isImagePath(filePath) || isImagePath(fileName)
-
-  if (!rawText && filePath) {
-    try {
-      const storedUpload = await downloadStoredUpload({
+  if (!isSupportedUploadKind(uploadKind)) {
+    const fallback = buildDeterministicCandidate(rawText)
+    if (fallback) {
+      return completeWithMenu({
         admin,
-        filePath,
+        uploadId,
+        menu: fallback.menu,
+        errorMessage: withFallbackWarning(
+          'Unsupported file type for Claude parsing. Parsed from fallback text; review before publishing.',
+          fallback
+        ),
       })
+    }
 
-      if (!mimeType && storedUpload.contentType) {
-        mimeType = storedUpload.contentType
+    return completeWithMenu({
+      admin,
+      uploadId,
+      menu: buildEmptyMenu(),
+      errorMessage: 'Unsupported file type. Upload a PDF, image, or TXT file.',
+    })
+  }
+
+  let upload: StoredUpload | null = null
+  if (filePath) {
+    try {
+      if (!admin) {
+        throw new Error('Parser storage access is unavailable')
+      }
+      upload = await downloadStoredUpload({ admin, filePath })
+      if (!mimeType && upload.contentType) {
+        mimeType = upload.contentType
+      }
+    } catch (downloadError) {
+      const fallback = buildDeterministicCandidate(rawText)
+      if (fallback) {
+        return completeWithMenu({
+          admin,
+          uploadId,
+          menu: fallback.menu,
+          errorMessage: withFallbackWarning(
+            'Could not load upload from storage. Parsed from fallback text; review before publishing.',
+            fallback
+          ),
+        })
       }
 
-      if (inputLooksLikeImage()) {
-        if (!fileData) {
-          fileData = bytesToBase64(storedUpload.bytes)
-        }
-      } else {
+      const message = downloadError instanceof Error ? downloadError.message : 'Could not load menu file'
+      return completeWithMenu({
+        admin,
+        uploadId,
+        menu: buildEmptyMenu(),
+        errorMessage: `${message}. Retry upload or review manually.`,
+      })
+    }
+  }
+
+  if (upload && upload.bytes.length > MAX_SYNC_UPLOAD_BYTES) {
+    return completeWithMenu({
+      admin,
+      uploadId,
+      menu: buildEmptyMenu(),
+      errorMessage: 'File is too large for synchronous parsing. Keep uploads under 20MB.',
+    })
+  }
+
+  const anthropicConfig = getAnthropicConfig()
+  if (!anthropicConfig.apiKey) {
+    if (!rawText && upload && filePath) {
+      rawText = (await extractTextFromStoredUpload({
+        upload,
+        filePath,
+        mimeType,
+      })).trim()
+    }
+
+    const fallback = buildDeterministicCandidate(rawText)
+    if (fallback) {
+      return completeWithMenu({
+        admin,
+        uploadId,
+        menu: fallback.menu,
+        errorMessage: withFallbackWarning(
+          'Claude parser is not configured. Parsed with deterministic fallback; review before publishing.',
+          fallback
+        ),
+      })
+    }
+
+    return completeWithMenu({
+      admin,
+      uploadId,
+      menu: buildEmptyMenu(),
+      errorMessage: 'Claude parser is not configured. Add Anthropic secrets and retry.',
+    })
+  }
+
+  if (!upload) {
+    const fallback = buildDeterministicCandidate(rawText)
+    if (fallback) {
+      return completeWithMenu({
+        admin,
+        uploadId,
+        menu: fallback.menu,
+        errorMessage: withFallbackWarning(
+          'Parsed from fallback text because uploaded file bytes were unavailable.',
+          fallback
+        ),
+      })
+    }
+
+    return completeWithMenu({
+      admin,
+      uploadId,
+      menu: buildEmptyMenu(),
+      errorMessage: 'Menu file bytes are unavailable for Claude parsing. Retry upload or review manually.',
+    })
+  }
+
+  try {
+    const claudeParsed = await parseMenuWithClaude({
+      config: anthropicConfig,
+      upload,
+      fileName,
+      mimeType,
+      uploadKind,
+    })
+
+    if (claudeParsed.menu.items.length === 0) {
+      if (!rawText && filePath) {
         rawText = (await extractTextFromStoredUpload({
-          upload: storedUpload,
+          upload,
           filePath,
           mimeType,
         })).trim()
       }
-    } catch (downloadError) {
-      const message = downloadError instanceof Error ? downloadError.message : 'Could not load menu file'
-      await markUpload(admin, uploadId, {
-        status: 'failed',
-        error_message: message,
-      })
-      return jsonResponse({ error: message }, 500)
-    }
-  }
 
-  if (!inputLooksLikeImage() && rawText.length >= 20) {
-    deterministicResult = parseMenuDeterministically(rawText)
-    if (shouldUseDeterministicResult(deterministicResult)) {
-      await markUpload(admin, uploadId, {
-        status: 'completed',
-        parsed_data: deterministicResult.menu,
-        error_message: null,
-      })
-      return jsonResponse(deterministicResult.menu)
-    }
-  }
-
-  if ((!rawText || rawText.length < 20) && !fileData) {
-    const fallback: ParsedMenu = {
-      categories: [{ name: 'Uncategorized', display_order: 1 }],
-      items: [],
-    }
-    await markUpload(admin, uploadId, {
-      status: 'completed',
-      parsed_data: fallback,
-      error_message: 'Could not extract enough text. Review menu manually.',
-    })
-    return jsonResponse(fallback)
-  }
-
-  const anthropicKey = Deno.env.get('ANTHROPIC_API_KEY')
-  const openAiKey = Deno.env.get('OPENAI_API_KEY')
-  const openAiBaseUrl = Deno.env.get('OPENAI_BASE_URL') ?? 'https://api.openai.com/v1'
-  if (!anthropicKey && !openAiKey) {
-    if (deterministicResult && deterministicResult.menu.items.length > 0) {
-      const bestEffort = withAllItemsNeedingReview(deterministicResult.menu)
-      await markUpload(admin, uploadId, {
-        status: 'completed',
-        parsed_data: bestEffort,
-        error_message: 'LLM keys missing. Returned best-effort deterministic parse.',
-      })
-      return jsonResponse(bestEffort)
-    }
-
-    await markUpload(admin, uploadId, {
-      status: 'failed',
-      error_message: 'Neither ANTHROPIC_API_KEY nor OPENAI_API_KEY is set',
-    })
-    return jsonResponse({ error: 'Parser is not configured' }, 500)
-  }
-
-  try {
-    let normalized: ParsedMenu
-    if (anthropicKey) {
-      try {
-        normalized = await parseWithClaude({
-          apiKey: anthropicKey,
-          fileName,
-          rawText,
-          fileData,
-          mimeType,
-        })
-      } catch (claudeError) {
-        if (!openAiKey) {
-          throw claudeError
-        }
-        normalized = await parseWithOpenAi({
-          apiKey: openAiKey,
-          baseUrl: openAiBaseUrl,
-          fileName,
-          rawText,
-          fileData,
-          mimeType,
+      const fallback = buildDeterministicCandidate(rawText)
+      if (fallback) {
+        return completeWithMenu({
+          admin,
+          uploadId,
+          menu: fallback.menu,
+          errorMessage: withFallbackWarning(
+            'Claude returned no items. Parsed with deterministic fallback; review before publishing.',
+            fallback
+          ),
         })
       }
-    } else {
-      normalized = await parseWithOpenAi({
-        apiKey: openAiKey!,
-        baseUrl: openAiBaseUrl,
-        fileName,
-        rawText,
-        fileData,
+
+      return completeWithMenu({
+        admin,
+        uploadId,
+        menu: buildEmptyMenu(),
+        errorMessage: 'Could not extract enough menu items. Try a clearer file or enter items manually.',
+      })
+    }
+
+    const dropRatio = claudeParsed.inputItems > 0
+      ? claudeParsed.droppedItems / claudeParsed.inputItems
+      : 0
+    const qualityMessage = claudeParsed.lowConfidence || dropRatio > 0.35
+      ? 'Claude parse confidence is low. Review all items before publishing.'
+      : null
+
+    return completeWithMenu({
+      admin,
+      uploadId,
+      menu: claudeParsed.menu,
+      errorMessage: qualityMessage,
+    })
+  } catch (claudeError) {
+    if (!rawText && filePath) {
+      rawText = (await extractTextFromStoredUpload({
+        upload,
+        filePath,
         mimeType,
+      })).trim()
+    }
+
+    const fallback = buildDeterministicCandidate(rawText)
+    if (fallback) {
+      return completeWithMenu({
+        admin,
+        uploadId,
+        menu: fallback.menu,
+        errorMessage: withFallbackWarning(
+          'Claude parsing failed. Deterministic fallback was used; review before publishing.',
+          fallback
+        ),
       })
     }
 
-    await markUpload(admin, uploadId, {
-      status: 'completed',
-      parsed_data: normalized,
-      error_message: null,
+    const message = claudeError instanceof Error ? claudeError.message : 'Claude parsing failed'
+    return completeWithMenu({
+      admin,
+      uploadId,
+      menu: buildEmptyMenu(),
+      errorMessage: `${message}. Retry upload or enter items manually.`,
     })
-
-    return jsonResponse(normalized)
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown parser error'
-
-    if (deterministicResult && deterministicResult.menu.items.length > 0) {
-      const bestEffort = withAllItemsNeedingReview(deterministicResult.menu)
-      await markUpload(admin, uploadId, {
-        status: 'completed',
-        parsed_data: bestEffort,
-        error_message: `${message}. Returned best-effort deterministic parse.`,
-      })
-      return jsonResponse(bestEffort)
-    }
-
-    await markUpload(admin, uploadId, {
-      status: 'failed',
-      error_message: message,
-    })
-    return jsonResponse({ error: message }, 500)
   }
 })

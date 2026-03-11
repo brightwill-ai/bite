@@ -4,11 +4,11 @@ import { useCallback, useMemo, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Upload, FileText, Check, Loader2, ChevronRight, Pencil, Trash2 } from 'lucide-react'
+import type { MenuCategory, MenuItem } from '@bite/types'
 import { PageHeader } from '@/components/PageHeader'
+import { createClient } from '@/lib/supabase/client'
 import { useAuthStore } from '@/store/auth'
 import { useMenuStore } from '@/store/menu'
-import { createClient } from '@/lib/supabase/client'
-import type { MenuCategory, MenuItem } from '@bite/types'
 
 type ParsedCategory = {
   name: string
@@ -32,32 +32,34 @@ type ParseMenuResponse = {
   items: ParsedItem[]
 }
 
-async function extractPdfTextViaApi(file: File): Promise<string> {
-  const formData = new FormData()
-  formData.append('file', file)
-  const response = await fetch('/api/extract-pdf', { method: 'POST', body: formData })
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({})) as { error?: string }
-    throw new Error(errorData.error ?? 'Failed to extract PDF text')
-  }
-  const data = await response.json() as { text?: string }
-  return typeof data.text === 'string' ? data.text : ''
+const MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+
+function isSupportedMenuFile(file: File): boolean {
+  const fileName = file.name.toLowerCase()
+  return (
+    fileName.endsWith('.pdf') ||
+    fileName.endsWith('.txt') ||
+    fileName.endsWith('.png') ||
+    fileName.endsWith('.jpg') ||
+    fileName.endsWith('.jpeg') ||
+    fileName.endsWith('.webp')
+  )
 }
 
-async function fileToBase64(file: File): Promise<string> {
-  const arrayBuffer = await file.arrayBuffer()
-  const bytes = new Uint8Array(arrayBuffer)
-  let binary = ''
-  for (let i = 0; i < bytes.byteLength; i++) {
-    binary += String.fromCharCode(bytes[i])
+function getUploadValidationError(file: File): string | null {
+  if (!isSupportedMenuFile(file)) {
+    return 'Only PDF, image, and TXT files are supported.'
   }
-  return btoa(binary)
+  if (file.size > MAX_UPLOAD_BYTES) {
+    return 'File is too large for synchronous parsing. Keep uploads under 20MB.'
+  }
+  return null
 }
 
 const parsingSteps = [
   'Uploading menu file...',
-  'Extracting text...',
-  'Parsing menu data...',
+  'Submitting to parser...',
+  'Parsing with Claude...',
   'Normalizing categories...',
   'Preparing review data...',
 ]
@@ -184,19 +186,6 @@ export default function MenuUploadPage() {
         uploadId = uploadRow.id
 
         const mimeType = file.type || 'application/octet-stream'
-        const isPdf = mimeType === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
-        const isImage = mimeType.startsWith('image/')
-
-        let rawText: string | undefined
-        if (isPdf) {
-          try {
-            rawText = await extractPdfTextViaApi(file)
-          } catch {
-            // Fallback to extraction inside the parse-menu edge function.
-            rawText = undefined
-          }
-        }
-        const fileData = isImage ? await fileToBase64(file) : undefined
 
         const { data, error: invokeError } = await supabase.functions.invoke('parse-menu', {
           body: {
@@ -204,18 +193,47 @@ export default function MenuUploadPage() {
             filePath,
             fileName: file.name,
             mimeType,
-            ...(rawText ? { rawText } : {}),
-            ...(fileData ? { fileData } : {}),
           },
         })
 
+        const parserError =
+          typeof data === 'object' &&
+          data !== null &&
+          'error' in data &&
+          typeof data.error === 'string'
+            ? data.error
+            : null
+
         if (invokeError) {
-          throw new Error(invokeError.message)
+          throw new Error(parserError ?? invokeError.message)
         }
 
         const payload = data as ParseMenuResponse | null
         if (!payload || !Array.isArray(payload.categories) || !Array.isArray(payload.items)) {
           throw new Error('Parser returned an invalid payload')
+        }
+
+        if (payload.items.length === 0) {
+          let message =
+            'Could not extract enough readable content from that file. Upload a text-based PDF, clearer image, or TXT file, or enter items manually.'
+
+          const { data: uploadRecord } = await supabase
+            .from('menu_uploads')
+            .select('error_message')
+            .eq('id', uploadId)
+            .maybeSingle()
+
+          const parserMessage =
+            typeof uploadRecord?.error_message === 'string'
+              ? uploadRecord.error_message.trim()
+              : ''
+          if (parserMessage) {
+            message = parserMessage
+          }
+
+          setError(message)
+          setStep(1)
+          return
         }
 
         const normalized = normalizeParsedMenu(restaurantId, payload)
@@ -257,6 +275,11 @@ export default function MenuUploadPage() {
     if (!file) {
       return
     }
+    const validationError = getUploadValidationError(file)
+    if (validationError) {
+      setError(validationError)
+      return
+    }
     setFileName(file.name)
     await parseFile(file)
   }
@@ -265,6 +288,11 @@ export default function MenuUploadPage() {
     event.preventDefault()
     const file = event.dataTransfer.files[0]
     if (!file) {
+      return
+    }
+    const validationError = getUploadValidationError(file)
+    if (validationError) {
+      setError(validationError)
       return
     }
     setFileName(file.name)
@@ -300,8 +328,8 @@ export default function MenuUploadPage() {
         title="Upload Menu"
         description={
           isOnboardingFlow
-            ? 'Step 2 of 3. Import your menu from a PDF document.'
-            : 'Import your menu from a PDF document'
+            ? 'Step 2 of 3. Import your menu from a PDF, image, or text document.'
+            : 'Import your menu from a PDF, image, or text document'
         }
       />
 
@@ -347,10 +375,10 @@ export default function MenuUploadPage() {
             >
               <Upload size={32} className="text-faint mb-4" />
               <p className="text-sm font-medium text-ink mb-1">Drop your menu file here</p>
-              <p className="text-xs text-muted mb-4">PDF, TXT, or image exports are supported</p>
+              <p className="text-xs text-muted mb-4">PDF, images, and TXT files are supported</p>
               <input
                 type="file"
-                accept=".pdf,.txt,.jpg,.jpeg,.png"
+                accept=".pdf,.txt,.png,.jpg,.jpeg,.webp"
                 onChange={(event) => {
                   void handleFileSelect(event)
                 }}

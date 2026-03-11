@@ -78,19 +78,24 @@ If you add a table, add:
 
 ### `parse-menu`
 
-- Input: upload metadata + extracted menu text
+- Input: upload metadata (`uploadId`, `filePath`, `fileName`, `mimeType`) and optional `rawText` fallback text
+- Keep a function-local `deno.json` import map in `supabase/functions/parse-menu/` so CLI deploy bundling resolves `@supabase/supabase-js` correctly
 - Downloads files from the private `menu-uploads` storage bucket
-- Extracts PDF text (with fallback decode for non-PDF files)
-- Admin upload page treats local `/api/extract-pdf` errors as non-fatal and falls back to server-side extraction in this Edge Function
-- Parser strategy:
-  - deterministic text/PDF parser first (no LLM needed when confidence is high)
-  - vision parse for image uploads
-  - LLM fallback (Claude-first with OpenAI fallback) when deterministic confidence is low or vision is required
+- Claude-first parsing flow:
+  - upload file bytes to Anthropic Files API (`/v1/files`) with header `anthropic-beta: files-api-2025-04-14`
+  - call Anthropic Messages API (`/v1/messages`) with `document` or `image` block referencing `file_id`
+  - use `output_config.format` JSON schema to return structured categories/items
+- Keep output contract stable (`categories[]`, `items[]`) and normalize model output:
+  - drop invalid items (missing name or non-positive price)
+  - normalize prices, category names, and booleans
+  - mark all items `needs_review=true` when confidence is low or many rows are dropped
+- Retry once with backoff for transient Anthropic errors (`429`/`5xx`) and enforce request timeout via `AbortController`
+- Deterministic fallback remains for Claude failures when usable text exists (`rawText` or server-side PDF/TXT extraction)
+- For PDF extraction fallback, use position-based ordering (line reconstruction + detached price-line repositioning) with `pdfjs-dist@5.5.207` config (`cMapUrl`, `cMapPacked`, `standardFontDataUrl`, `useSystemFonts`)
+- Never decode raw PDF bytes as plain text when extraction fails
+- Admin upload should not proceed to review when parser output has zero items; keep users on upload with a clear error message
+- Enforce sync guardrails (supported file types + 20MB max upload)
 - Updates `menu_uploads.status`, `parsed_data`, and `error_message`
-
-Required secret (at least one):
-
-- `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`
 
 ### `trigger-print`
 
@@ -103,6 +108,15 @@ Required secret (at least one):
 Optional secret:
 
 - `PRINT_WEBHOOK_SECRET`
+
+Required parser secret:
+
+- `ANTHROPIC_API_KEY`
+
+Optional parser secrets:
+
+- `ANTHROPIC_MODEL` (default `claude-haiku-4-5`; parser will also try `claude-sonnet-4-20250514` and JSON-text mode if structured output is unsupported)
+- `ANTHROPIC_TIMEOUT_MS` (default `25000`)
 
 ## Storage
 

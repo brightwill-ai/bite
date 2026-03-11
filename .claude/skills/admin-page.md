@@ -40,7 +40,10 @@ Use this when creating or editing pages in `apps/admin`.
 - Forgetting to refresh state after upload/import flows.
 - Querying without restaurant scope.
 - During onboarding, inserting `restaurants` with `is_active=false` and chaining `.select()` can fail due RLS on `RETURNING` before a staff row exists. Insert without returning rows, create owner staff row, then read.
-- Failing hard on local PDF extraction; keep upload resilient by falling back to `parse-menu` edge extraction when `/api/extract-pdf` fails.
+- Failing hard on local PDF extraction; `/api/extract-pdf` uses position-based ordering and price-line repair, and upload should still fall back to `parse-menu` edge extraction when local extraction fails.
+- Image uploads (`.png/.jpg/.jpeg/.webp`) should run through `/api/extract-image` OCR before calling `parse-menu`; if OCR returns no text, keep users on upload with a clear retry message.
+- If `parse-menu` returns a non-2xx response, keep upload resilient by using a local deterministic text fallback rather than dropping users back to step 1.
+- If parser output has zero items (or text looks corrupted), keep users on upload step with a clear manual-review prompt instead of opening an empty review state.
 
 ## After Changes
 
