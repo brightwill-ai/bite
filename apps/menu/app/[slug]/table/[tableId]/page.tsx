@@ -1,6 +1,7 @@
 import { notFound } from 'next/navigation'
 import type { MenuItem, Modifier, ModifierGroup, Restaurant, Table } from '@bite/types'
 import MenuTableClientPage, { type InitialMenuData, type MenuCategory } from '@/components/MenuTableClientPage'
+import { normalizeMenuEmoji } from '@/lib/emoji'
 import { createClient } from '@/lib/supabase/server'
 
 interface PageProps {
@@ -108,7 +109,7 @@ function toMenuItem(row: {
     description: row.description ?? undefined,
     price: row.price,
     image_url: row.image_url ?? undefined,
-    emoji: row.emoji ?? undefined,
+    emoji: normalizeMenuEmoji(row.emoji),
     is_available: row.is_available ?? true,
     is_popular: row.is_popular ?? false,
     is_new: row.is_new ?? false,
@@ -155,7 +156,7 @@ function toModifier(row: {
     price_delta: row.price_delta ?? 0,
     is_available: row.is_available ?? true,
     display_order: row.display_order ?? 0,
-    emoji: row.emoji ?? undefined,
+    emoji: normalizeMenuEmoji(row.emoji),
   }
 }
 

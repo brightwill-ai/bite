@@ -52,7 +52,6 @@ Before working on any task, check `.claude/skills/` for a relevant skill file. S
 ├── state.md           — Zustand store patterns
 ├── admin-page.md      — How to build a new admin page
 ├── menu-feature.md    — How to add features to the customer menu app
-├── menu-upload.md     — Menu upload + parser orchestration flow
 ├── types.md           — Adding/modifying shared types
 ├── mock-data.md       — How to extend mock data
 └── supabase.md        — Supabase integration patterns (Phase 2+)
@@ -145,8 +144,6 @@ font-mono     →  JetBrains Mono     — order/ticket numbers, codes
 - **Customer app** (`apps/menu`): Zustand, in-memory only, no persistence
 - **Admin portal** (`apps/admin`): Zustand stores backed by Supabase data (no localStorage persistence for menu/auth state)
 - **No Redux, no Context API for global state** — Zustand only
-- Prefer selector-based subscriptions (`useStore((state) => state.slice)`) over `useStore()` full-store reads in components
-- Setters that sync route/table context should be idempotent (no state write when values are unchanged)
 
 ### Data Flow (Current: Phase 2 Backend Wiring)
 - `apps/menu` and `apps/admin` use Supabase for runtime data (Auth, menu, tables, orders, uploads)
@@ -188,7 +185,7 @@ Phase 2 — Backend Wiring (CURRENT)
   ✓ Database schema (11 tables) + RLS + storage buckets
   ✓ Replace mock data with Supabase queries (menu/admin)
   ✓ Real auth (Supabase Auth) + onboarding flow
-  ✓ Claude-first menu parser Edge Function (Files API + structured outputs + deterministic fallback)
+  ✓ Hybrid menu parser Edge Function (position-based PDF extraction + deterministic text parse, vision for images, LLM fallback with anti-hallucination instructions)
   ✓ Order submission to DB (`create_order` RPC)
   ✓ PrintNode trigger Edge Function + DB insert webhook trigger
 
@@ -265,23 +262,6 @@ layout.tsx             — Next.js layouts (required name)
 - **Framer Motion with Next.js**: Wrap AnimatePresence components in a client boundary. `layout` animations require `LayoutGroup` at the right level.
 
 - **Zustand + SSR**: Zustand stores initialize on both server and client. Use the `useStore` pattern with a `useRef` check, or use `dynamic(() => import(...), { ssr: false })` for components that depend on store state that differs between server and client.
-- **Zustand update loops**: Avoid depending on a full-store object (`const store = useStore()`) inside `useEffect`/`useCallback`. Select specific actions/state and keep setters idempotent to prevent `Maximum update depth exceeded` loops.
-
-- **Supabase Function bundling**: Keep `deno.json` inside each function directory (not only `supabase/functions/`) so `supabase functions deploy` resolves bare imports like `@supabase/supabase-js`.
-
-- **Menu parser secrets**: `parse-menu` requires `ANTHROPIC_API_KEY`; `ANTHROPIC_MODEL` and `ANTHROPIC_TIMEOUT_MS` are optional overrides. Keep all Anthropic secrets server-side only.
-
-- **Claude structured output mode**: Keep `output_config.format` JSON schema aligned with `categories[]/items[]`, and do not enable citations in that mode.
-
-- **Menu parser fallback**: Use deterministic parsing only as fallback when Claude fails and usable text exists (request `rawText` or server-side PDF/TXT extraction). Never decode raw PDF bytes as plain text.
-
-- **Sync parser guardrails**: Enforce parser upload constraints (supported types + 20MB cap) and keep upload UX on step 1 when parser returns zero items.
-- **Menu emoji shortcodes**: Some data can contain shortcode text (`:burger:`, `hot_pepper`) instead of Unicode emoji. Normalize emoji values before rendering menu item/modifier icons and fallback to defaults when token-only text is invalid.
-
-- **Parse function auth failures**: `supabase.functions.invoke('parse-menu')` can return `401` (`Edge Function returned a non-2xx status code`) when the browser session is stale; check session first and send explicit `Authorization: Bearer <access_token>`.
-- **Function invoke auth drift**: In admin upload flow, prefer explicit direct `fetch` to `/functions/v1/parse-menu` with `Authorization` and `apikey` headers plus refresh+retry on `401` to avoid transient client SDK token mismatch.
-
-- **Localhost auth collisions**: Running multiple apps on `localhost` ports can share Supabase SSR auth cookies and churn refresh tokens. Keep app-specific cookie names aligned across browser client, server client, and middleware (admin uses `sb-admin-auth-token`).
 
 ---
 

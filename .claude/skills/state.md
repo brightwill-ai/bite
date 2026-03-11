@@ -27,6 +27,7 @@ All global state uses Zustand. Use this when creating or editing stores.
 - Keep state + actions in one typed interface.
 - Use optimistic updates only when error handling is explicit.
 - For DB-backed actions, fail safe: if mutation fails, do not mutate local state.
+- For context-style setters (restaurant/table/session), no-op when incoming values match current state.
 
 ## Example Pattern (DB-backed)
 
@@ -45,12 +46,14 @@ Guidelines:
 - `loadMenu` should fetch categories/items/modifiers from Supabase.
 - Mutations should write to Supabase first, then update local state.
 - Keep selectors narrow in components to reduce re-renders.
+- In React hooks, subscribe to specific slices/actions instead of passing a full store object into effect dependencies.
 
 ## Anti-Patterns
 
 - Re-introducing mock data in runtime stores.
 - Persisting Supabase records in localStorage without explicit need.
 - Selecting entire store object in components.
+- Calling non-idempotent setters from `useEffect` on every render path (can cause `Maximum update depth exceeded`).
 
 ## After Changes
 

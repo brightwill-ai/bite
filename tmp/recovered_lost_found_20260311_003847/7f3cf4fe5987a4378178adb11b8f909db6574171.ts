@@ -17,11 +17,6 @@ QR table-side ordering for restaurants. Customers scan, order, and track ticket 
 - Zustand for client state
 - Supabase (Postgres, Auth, Storage, Edge Functions)
 
-## Zustand Conventions
-
-- Prefer selector-based subscriptions in components (`useStore((state) => state.slice)`) instead of `useStore()` full-store objects.
-- Keep context setters (for example restaurant/table context) idempotent by no-oping when values are unchanged.
-
 ## Quick Start
 
 ```bash
@@ -81,18 +76,10 @@ Supabase is fully wired for menu/admin runtime data.
 - Edge Functions:
   - `supabase/functions/parse-menu`
   - `supabase/functions/trigger-print`
-- Keep a `deno.json` import map inside each function directory (for example `supabase/functions/parse-menu/deno.json`) so `supabase functions deploy` can resolve bare imports like `@supabase/supabase-js`.
-- Admin menu upload now uses a synchronous server-side parse flow: upload to storage, then invoke `parse-menu` with file metadata (`uploadId`, `filePath`, `fileName`, `mimeType`).
-- Admin upload calls `parse-menu` with a direct function endpoint `fetch` (explicit `Authorization` + `apikey` headers) instead of relying only on `supabase.functions.invoke`, then retries once after token refresh on `401`.
-- Admin app auth now uses a dedicated cookie name (`sb-admin-auth-token`) in browser client, server client, and middleware to avoid localhost cross-app session collisions during multi-app dev (`:3000/:3001/:3002`).
-- Admin upload keeps users on the upload step (with a clear error) when parser output has zero items, instead of opening an empty review state.
-- `parse-menu` is Claude-native (Files API + Messages API structured outputs) and returns the existing `categories[]`/`items[]` contract used by publish flow.
-- `parse-menu` uploads the stored menu file to Anthropic (`/v1/files` with `anthropic-beta: files-api-2025-04-14`) and parses with structured output schema (`output_config.format`).
-- `parse-menu` validates/normalizes model output (drops invalid items, normalizes prices/categories/booleans) and marks all items `needs_review=true` when confidence is low or too many rows are dropped.
-- `parse-menu` retries transient Anthropic failures once (`429`/`5xx`) with backoff and uses request timeouts via `AbortController`.
-- Deterministic parser fallback remains in `parse-menu` for Claude failures when usable text is available (request `rawText` or server-side extraction for PDF/TXT).
-- Sync guardrails enforce supported file types and a 20MB upload limit.
-- Menu UI normalizes emoji shortcodes/tokens (for example `:burger:`/`hot_pepper`) to Unicode emoji before rendering and falls back to defaults when invalid.
+- Admin menu upload uses local PDF extraction (`/api/extract-pdf`) with position-based line reconstruction and detached-price reordering, then falls back to `parse-menu` server extraction if local extraction fails.
+- `parse-menu` uses the same position-based PDF text reconstruction path server-side for consistency with admin local extraction.
+- `parse-menu` uses a hybrid strategy: deterministic parsing for text/PDF, vision parsing for image files, and LLM fallback when deterministic confidence is low.
+- LLM parser prompts include anti-hallucination constraints (no invented items/prices/categories; uncertain entries should be omitted or marked `needs_review`).
 - Migration strategy doc: `docs/migration_strategy.md`
 - Security hardening applied:
   - fixed function `search_path` settings
@@ -142,19 +129,8 @@ Required GitHub repo secrets:
 
 Edge Function secrets:
 
+- `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` (for `parse-menu`)
 - optional `PRINT_WEBHOOK_SECRET` (for secured webhook calls)
-- required `ANTHROPIC_API_KEY` (Claude API key for `parse-menu`)
-- optional `ANTHROPIC_MODEL` (default: `claude-haiku-4-5`)
-- optional `ANTHROPIC_TIMEOUT_MS` (default: `25000`)
-
-Set parser secrets:
-
-```bash
-supabase secrets set \
-  ANTHROPIC_API_KEY=<your_api_key> \
-  ANTHROPIC_MODEL=claude-haiku-4-5 \
-  ANTHROPIC_TIMEOUT_MS=25000
-```
 
 ## Current Status
 

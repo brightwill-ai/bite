@@ -18,16 +18,15 @@ Menu page now loads from Supabase:
 - `tables` by `restaurant_id` + `table_number`
 - `menu_categories`, `menu_items`
 - `modifier_groups`, `modifiers`
-- Normalize `menu_items.emoji` and `modifiers.emoji` before render; DB/parser values may arrive as shortcodes (`:burger:`) or token text (`hot_pepper`).
 
 ## Order Flow
 
 - Cart state comes from Zustand (`apps/menu/store/cart.ts`).
 - Place order via `create_order` RPC.
-- Use persistent per-table `session_id` in sessionStorage.
+- Use persistent per-table `session_id` in localStorage.
 - After order success:
   - show confirmation ticket number from DB response
-  - printing is triggered server-side via DB webhook on `orders` insert
+  - trigger kitchen printing via `trigger-print` Edge Function
 
 ## UI/Interaction Rules
 

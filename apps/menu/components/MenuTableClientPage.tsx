@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence } from 'framer-motion'
 import toast from 'react-hot-toast'
-import type { MenuItem, Modifier, ModifierGroup, Restaurant, SelectedModifier, Table } from '@bite/types'
+import type { CartItem, MenuItem, Modifier, ModifierGroup, Restaurant, SelectedModifier, Table } from '@bite/types'
 import CartSheet from '@/components/CartSheet'
 import CategorySidebar from '@/components/CategorySidebar'
 import FloatingCartBar from '@/components/FloatingCartBar'
@@ -92,7 +92,15 @@ function getSessionId(restaurantId: string, tableId: string): string {
 
 export default function MenuTableClientPage({ initialData }: MenuTableClientPageProps) {
   const supabase = useMemo(() => createClient(), [])
-  const cart = useCartStore()
+  const cartItems = useCartStore((state) => state.items)
+  const cartSpecialInstructions = useCartStore((state) => state.specialInstructions)
+  const setCartContext = useCartStore((state) => state.setContext)
+  const setCartInstructions = useCartStore((state) => state.setInstructions)
+  const addCartItem = useCartStore((state) => state.addItem)
+  const updateCartQuantity = useCartStore((state) => state.updateQuantity)
+  const clearCart = useCartStore((state) => state.clearCart)
+  const getCartTotal = useCartStore((state) => state.getTotal)
+  const getCartCount = useCartStore((state) => state.getCount)
 
   const restaurant = initialData.restaurant
   const table = initialData.table
@@ -109,7 +117,7 @@ export default function MenuTableClientPage({ initialData }: MenuTableClientPage
   const [selectedItem, setSelectedItem] = useState<MenuItem | null>(null)
   const [cartOpen, setCartOpen] = useState(false)
   const [confirmed, setConfirmed] = useState(false)
-  const [confirmedItems, setConfirmedItems] = useState<typeof cart.items>([])
+  const [confirmedItems, setConfirmedItems] = useState<CartItem[]>([])
   const [confirmedTotal, setConfirmedTotal] = useState(0)
   const [ticketNumber, setTicketNumber] = useState('')
   const [bounceKey, setBounceKey] = useState(0)
@@ -119,8 +127,8 @@ export default function MenuTableClientPage({ initialData }: MenuTableClientPage
   const isScrollingFromClickRef = useRef(false)
 
   useEffect(() => {
-    cart.setContext(restaurant.id, table.id, restaurant.name)
-  }, [cart, restaurant.id, restaurant.name, table.id])
+    setCartContext(restaurant.id, table.id, restaurant.name)
+  }, [restaurant.id, restaurant.name, setCartContext, table.id])
 
   const filteredItems = useMemo(() => {
     if (!searchQuery.trim()) {
@@ -212,7 +220,7 @@ export default function MenuTableClientPage({ initialData }: MenuTableClientPage
 
   const handleAddSimple = useCallback(
     (item: MenuItem) => {
-      cart.addItem({
+      addCartItem({
         menuItemId: item.id,
         name: item.name,
         price: item.price,
@@ -222,12 +230,12 @@ export default function MenuTableClientPage({ initialData }: MenuTableClientPage
       setBounceKey((key) => key + 1)
       toast.success(`${item.name} added`, { duration: 1500 })
     },
-    [cart]
+    [addCartItem]
   )
 
   const handleAddWithModifiers = useCallback(
     (item: MenuItem, selectedModifiers: SelectedModifier[], quantity: number) => {
-      cart.addItem({
+      addCartItem({
         menuItemId: item.id,
         name: item.name,
         price: item.price,
@@ -238,11 +246,11 @@ export default function MenuTableClientPage({ initialData }: MenuTableClientPage
       setBounceKey((key) => key + 1)
       toast.success(`${item.name} added`, { duration: 1500 })
     },
-    [cart]
+    [addCartItem]
   )
 
   const handlePlaceOrder = useCallback(async () => {
-    if (cart.items.length === 0) {
+    if (cartItems.length === 0) {
       toast.error('Your cart is empty')
       return
     }
@@ -250,7 +258,7 @@ export default function MenuTableClientPage({ initialData }: MenuTableClientPage
     setPlacingOrder(true)
     setOrderError(null)
 
-    const itemsPayload = cart.items.map((item) => ({
+    const itemsPayload = cartItems.map((item) => ({
       menu_item_id: item.menuItemId,
       item_name: item.name,
       item_price: item.price,
@@ -268,7 +276,7 @@ export default function MenuTableClientPage({ initialData }: MenuTableClientPage
       p_session_id: sessionId,
       p_restaurant_id: restaurant.id,
       p_table_id: table.id,
-      p_special_instructions: cart.specialInstructions || undefined,
+      p_special_instructions: cartSpecialInstructions || undefined,
       p_items: itemsPayload,
     })
 
@@ -285,14 +293,14 @@ export default function MenuTableClientPage({ initialData }: MenuTableClientPage
       return
     }
 
-    setConfirmedItems([...cart.items])
+    setConfirmedItems([...cartItems])
     setConfirmedTotal(parsed.total)
     setTicketNumber(String(parsed.ticket_number))
     setCartOpen(false)
-    cart.clearCart()
+    clearCart()
     setConfirmed(true)
     setPlacingOrder(false)
-  }, [cart, restaurant.id, supabase, table.id])
+  }, [cartItems, cartSpecialInstructions, clearCart, restaurant.id, supabase, table.id])
 
   const handleOrderMore = useCallback(() => {
     setConfirmed(false)
@@ -358,7 +366,7 @@ export default function MenuTableClientPage({ initialData }: MenuTableClientPage
         </div>
       </div>
 
-      <FloatingCartBar count={cart.getCount()} total={cart.getTotal()} onOpen={() => setCartOpen(true)} bounceKey={bounceKey} />
+      <FloatingCartBar count={getCartCount()} total={getCartTotal()} onOpen={() => setCartOpen(true)} bounceKey={bounceKey} />
 
       <AnimatePresence>
         {selectedItem && (
@@ -375,12 +383,12 @@ export default function MenuTableClientPage({ initialData }: MenuTableClientPage
       <AnimatePresence>
         {cartOpen && (
           <CartSheet
-            items={cart.items}
+            items={cartItems}
             tableId={table.table_number}
-            subtotal={cart.getTotal()}
-            specialInstructions={cart.specialInstructions}
-            onUpdateQuantity={cart.updateQuantity}
-            onSetInstructions={cart.setInstructions}
+            subtotal={getCartTotal()}
+            specialInstructions={cartSpecialInstructions}
+            onUpdateQuantity={updateCartQuantity}
+            onSetInstructions={setCartInstructions}
             onPlaceOrder={() => {
               void handlePlaceOrder()
             }}

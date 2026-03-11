@@ -1,0 +1,38 @@
+recovered_file,likely_path,reason
+tmp/recovered_lost_found_20260311_003847/0934f48a329a034d8defa207321ff4f589194d29.tsx,apps/admin/app/(dashboard)/layout.tsx,Function name
+tmp/recovered_lost_found_20260311_003847/0a69479cfda6c9c3696a4b69f668c5dbcd4bf804.ts,README.md,README-style heading
+tmp/recovered_lost_found_20260311_003847/0cbbb0be61de5318e9cb8809b7f1b7eb2b73eb66.tsx,supabase/functions/parse-menu/index.ts,Edge function
+tmp/recovered_lost_found_20260311_003847/13a58de8100e8565417342640128dff47460080d.tsx,apps/admin/app/(dashboard)/tables/page.tsx,Function name
+tmp/recovered_lost_found_20260311_003847/17bf9932a3968706ace4fcff8b2c0804ea1a4a93.yml,docker-compose.yml,docker compose syntax
+tmp/recovered_lost_found_20260311_003847/1eb31a09c61c0a372f32c643dd03762ac3ed45f6.tsx,.claude/skills/supabase.md,Header matches skill
+tmp/recovered_lost_found_20260311_003847/25052adbd32c1d07c2793006c10a2db28373dba4.tsx,AGENTS.md,Header matches AGENTS
+tmp/recovered_lost_found_20260311_003847/2b53fa57132504006f5513eb86e45f30831ec57e.tsx,AGENTS.md,Header matches AGENTS
+tmp/recovered_lost_found_20260311_003847/341c0c28eb23f1bf8bf6f88908b30896781f6f0a.tsx,apps/menu/components/ItemDetailSheet.tsx,Function name
+tmp/recovered_lost_found_20260311_003847/4cb1ae6f5d8b155c79bc64c1de11ea3c1a61a5fe.tsx,apps/admin/app/(dashboard)/orders/page.tsx,Function name
+tmp/recovered_lost_found_20260311_003847/4e6e82788501f02578b3f2c6605ab593bd6e6c0f.tsx,.claude/skills/supabase.md,Header matches skill
+tmp/recovered_lost_found_20260311_003847/507335d6dcb45208e1b860a4f7cb1516583dada7.tsx,AGENTS.md,Header matches AGENTS
+tmp/recovered_lost_found_20260311_003847/5b6a316a0363aee48d062b1d1d052edbbc0986d8.tsx,apps/admin/app/(dashboard)/dashboard/page.tsx,Function name
+tmp/recovered_lost_found_20260311_003847/62180817acdeb0381502d3d774beef76074c58df.md,.claude/skills/admin-page.md,Header matches skill
+tmp/recovered_lost_found_20260311_003847/7164bc07481507dd7121f2c801a0581328fda963.tsx,apps/menu/app/[slug]/table/[tableId]/page.tsx,Function signature
+tmp/recovered_lost_found_20260311_003847/76ca1d1d7054ab352ad4e83c0f2a70e7f84d53d6.tsx,supabase/functions/parse-menu/index.ts,Edge function
+tmp/recovered_lost_found_20260311_003847/7f3cf4fe5987a4378178adb11b8f909db6574171.ts,README.md,README-style heading
+tmp/recovered_lost_found_20260311_003847/86a2c55b835eb0c22fbaf6794ff8aad2ab7301a1.tsx,supabase/functions/parse-menu/index.ts,Edge function
+tmp/recovered_lost_found_20260311_003847/8a669bbc55e2e01815b4ad8825f44b423afa6e06.ts,README.md,README-style heading
+tmp/recovered_lost_found_20260311_003847/8b93d31c4fd0201ed5c7d732435dca041a544531.tsx,apps/admin/app/(dashboard)/settings/page.tsx,Function name
+tmp/recovered_lost_found_20260311_003847/8cbb680ea1a21cf12a72755118a72261ba8703f6.tsx,.claude/skills/supabase.md,Header matches skill
+tmp/recovered_lost_found_20260311_003847/90221a1126e69b9f877eface551b0a84abeaa267.tsx,AGENTS.md,Header matches AGENTS
+tmp/recovered_lost_found_20260311_003847/9e91767dd5c688a23aef0ab286c18b389f7be81b.tsx,apps/admin/app/(dashboard)/menu/upload/page.tsx,Function name
+tmp/recovered_lost_found_20260311_003847/a21cf19c6473f30479e5659e045957444066f4d4.ts,README.md,README-style heading
+tmp/recovered_lost_found_20260311_003847/acfeddba17434cf4d524dfaf8a181317c7793969.tsx,.claude/skills/supabase.md,Header matches skill
+tmp/recovered_lost_found_20260311_003847/ae4c7aa7729da7403d87953ce87e1962245c256b.tsx,supabase/functions/parse-menu/index.ts,Edge function
+tmp/recovered_lost_found_20260311_003847/b0956b0931746d4f5342f3315b3890fdfd0160c4.tsx,apps/admin/app/(dashboard)/menu/upload/page.tsx,Function name
+tmp/recovered_lost_found_20260311_003847/b29f319ef2554af707d930f495c2e7b7533b57e4.md,.claude/skills/admin-page.md,Header matches skill
+tmp/recovered_lost_found_20260311_003847/b549259d221851698c8f7af3bc611dee8c967b03.md,.claude/skills/admin-page.md,Header matches skill
+tmp/recovered_lost_found_20260311_003847/c12c79e8f4735885e70d69c36bcb0abc8add60bc.md,.claude/skills/admin-page.md,Header matches skill
+tmp/recovered_lost_found_20260311_003847/c6b5db2c31f759d3358470c860a3519e32aab669.tsx,apps/admin/store/auth.ts,Zustand auth store fields
+tmp/recovered_lost_found_20260311_003847/cde1c35b8bf8eada76cd92c29c70100eeb1be01c.md,.claude/skills/menu-feature.md,Header matches skill
+tmp/recovered_lost_found_20260311_003847/f18d01706df253eab19e8d1060924cd15f06639c.tsx,apps/menu/store/cart.ts,Zustand store pattern
+tmp/recovered_lost_found_20260311_003847/f37c1ab1be54a5e7faea99702cfcb751797f0fc4.ts,README.md,README-style heading
+tmp/recovered_lost_found_20260311_003847/fb7812863c6c244d62b05e0831a56549ba44f0d9.tsx,apps/admin/app/(dashboard)/menu/upload/page.tsx,Function name
+tmp/recovered_lost_found_20260311_003847/fcf42a62929719158b4cffe8089e76ecf9ce9a6b.tsx,apps/admin/app/(dashboard)/menu/upload/page.tsx,Function name
+tmp/recovered_lost_found_20260311_003847/ff4d8fe809d60de96b1a131d681aa2dbffd1e7c0.tsx,.claude/skills/supabase.md,Header matches skill

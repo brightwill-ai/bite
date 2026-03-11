@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Plus } from 'lucide-react'
 import { motion } from 'framer-motion'
 import type { MenuItem, ModifierGroup } from '@bite/types'
+import { normalizeMenuEmoji } from '@/lib/emoji'
 import { cn } from '@/lib/utils'
 
 interface MenuItemCardProps {
@@ -19,6 +20,7 @@ function formatPrice(price: number): string {
 
 export default function MenuItemCard({ item, hasModifiers, onAdd, onOpenDetail }: MenuItemCardProps) {
   const [addScale, setAddScale] = useState(false)
+  const displayEmoji = normalizeMenuEmoji(item.emoji) ?? '🍽️'
 
   const handleAdd = () => {
     if (!item.is_available) return
@@ -41,9 +43,9 @@ export default function MenuItemCard({ item, hasModifiers, onAdd, onOpenDetail }
       <button
         onClick={() => item.is_available && onOpenDetail(item)}
         aria-label={`View details for ${item.name}`}
-        className="w-[84px] h-[84px] rounded-[8px] bg-surface flex items-center justify-center flex-shrink-0 text-[40px]"
+        className="w-[84px] h-[84px] rounded-[8px] bg-surface overflow-hidden flex items-center justify-center flex-shrink-0 text-[40px]"
       >
-        {item.emoji || '🍽️'}
+        {displayEmoji}
       </button>
 
       <div className="flex-1 min-w-0 flex flex-col justify-between h-[84px]">

@@ -4,6 +4,7 @@ import { useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { X, Plus, Minus } from 'lucide-react'
 import type { CartItem, SelectedModifier } from '@bite/types'
+import { normalizeMenuEmoji } from '@/lib/emoji'
 import { cn } from '@/lib/utils'
 
 interface CartSheetProps {
@@ -108,7 +109,7 @@ export default function CartSheet({
                 <div className="flex items-start justify-between">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="text-[18px]">{item.emoji || '🍽️'}</span>
+                      <span className="text-[18px]">{normalizeMenuEmoji(item.emoji) || '🍽️'}</span>
                       <h3 className="text-[14px] font-semibold text-ink truncate">
                         {item.name}
                       </h3>

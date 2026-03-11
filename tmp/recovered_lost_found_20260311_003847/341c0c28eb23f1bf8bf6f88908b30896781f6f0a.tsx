@@ -4,7 +4,6 @@ import { useState, useMemo, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { X, Plus, Minus, Check } from 'lucide-react'
 import type { MenuItem, ModifierGroup, Modifier, SelectedModifier } from '@bite/types'
-import { normalizeMenuEmoji } from '@/lib/emoji'
 import { cn } from '@/lib/utils'
 
 interface ItemDetailSheetProps {
@@ -35,7 +34,6 @@ export default function ItemDetailSheet({
   const [quantity, setQuantity] = useState(1)
   const [selected, setSelected] = useState<Record<string, string[]>>({})
   const [activeGroupTab, setActiveGroupTab] = useState(modifierGroups[0]?.id || '')
-  const displayItemEmoji = normalizeMenuEmoji(item.emoji) ?? '🍽️'
 
   const handleSelectModifier = (group: ModifierGroup, modifierId: string) => {
     setSelected((prev) => {
@@ -153,7 +151,7 @@ export default function ItemDetailSheet({
           <div className="overflow-y-auto flex-1 pb-4">
             {/* Emoji area */}
             <div className="h-[220px] bg-surface flex items-center justify-center text-[80px]">
-              {displayItemEmoji}
+              {item.emoji || '🍽️'}
             </div>
 
             {/* Item info */}
@@ -218,7 +216,7 @@ export default function ItemDetailSheet({
                           )}
                         >
                           <div className="w-[52px] h-[52px] rounded-[8px] bg-surface flex items-center justify-center text-[28px] flex-shrink-0">
-                            {normalizeMenuEmoji(mod.emoji) || '🔘'}
+                            {mod.emoji || '🔘'}
                           </div>
                           <div className="flex-1 text-left">
                             <p className="text-[14px] font-medium text-ink">{mod.name}</p>
@@ -288,5 +286,6 @@ export default function ItemDetailSheet({
           </div>
         </motion.div>
       </motion.div>
+    </motion.div>
   )
 }
