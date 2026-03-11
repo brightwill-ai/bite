@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { QueryData } from '@supabase/supabase-js'
 import { AnimatePresence, motion } from 'framer-motion'
 import { ChevronRight, Clock, X } from 'lucide-react'
@@ -22,6 +22,7 @@ interface UiOrder {
   items: UiOrderItem[]
   status: OrderStatus
   time: string
+  created_at: string | null
   total: number
   special_instructions: string
 }
@@ -177,6 +178,53 @@ export default function OrdersPage() {
   const [isLoading, setIsLoading] = useState(false)
   const [page, setPage] = useState(1)
 
+  const orderSelectQuery = `
+    id,
+    ticket_number,
+    status,
+    special_instructions,
+    total,
+    created_at,
+    table:tables(table_number, label),
+    order_items(
+      id,
+      item_name,
+      item_price,
+      quantity,
+      subtotal,
+      order_item_modifiers(name, price_delta)
+    )
+  `
+
+  const normalizeRow = useCallback((row: Record<string, unknown>): UiOrder => {
+    const ticket = `#${String(row.ticket_number).padStart(3, '0')}`
+    const tableData = row.table as { label?: string | null; table_number?: string | null } | null
+    const tableLabel =
+      tableData?.label || tableData?.table_number
+        ? `T-${tableData?.label ?? tableData?.table_number ?? '?'}`
+        : 'T-?'
+
+    const rawItems = (row.order_items as Array<{ item_name: string; item_price: number; quantity: number }>) ?? []
+    const orderItems: UiOrderItem[] = rawItems.map((item) => ({
+      name: item.item_name,
+      quantity: item.quantity,
+      price: Math.round(item.item_price * 100),
+    }))
+
+    const createdAt = (row.created_at as string | null) ?? null
+    return {
+      id: row.id as string,
+      ticket_number: ticket,
+      table: tableLabel,
+      items: orderItems,
+      status: normalizeStatus(row.status as string),
+      time: formatRelativeTime(createdAt),
+      created_at: createdAt,
+      total: Math.round(((row.total as number) ?? 0) * 100),
+      special_instructions: (row.special_instructions as string) ?? '',
+    }
+  }, [])
+
   useEffect(() => {
     const loadOrders = async () => {
       if (!restaurantId) {
@@ -187,25 +235,7 @@ export default function OrdersPage() {
       setIsLoading(true)
       const query = supabase
         .from('orders')
-        .select(
-          `
-            id,
-            ticket_number,
-            status,
-            special_instructions,
-            total,
-            created_at,
-            table:tables(table_number, label),
-            order_items(
-              id,
-              item_name,
-              item_price,
-              quantity,
-              subtotal,
-              order_item_modifiers(name, price_delta)
-            )
-          `
-        )
+        .select(orderSelectQuery)
         .eq('restaurant_id', restaurantId)
         .order('created_at', { ascending: false })
 
@@ -218,36 +248,78 @@ export default function OrdersPage() {
         return
       }
 
-      const normalized: UiOrder[] = data.map((row: OrderQueryRow) => {
-        const ticket = `#${String(row.ticket_number).padStart(3, '0')}`
-        const tableLabel = row.table?.label || row.table?.table_number
-          ? `T-${row.table?.label ?? row.table?.table_number ?? '?'}`
-          : 'T-?'
-
-        const orderItems: UiOrderItem[] = (row.order_items ?? []).map((item) => ({
-          name: item.item_name,
-          quantity: item.quantity,
-          price: Math.round(item.item_price * 100),
-        }))
-
-        return {
-          id: row.id,
-          ticket_number: ticket,
-          table: tableLabel,
-          items: orderItems,
-          status: normalizeStatus(row.status),
-          time: formatRelativeTime(row.created_at),
-          total: Math.round((row.total ?? 0) * 100),
-          special_instructions: row.special_instructions ?? '',
-        }
-      })
+      const normalized: UiOrder[] = data.map((row: OrderQueryRow) => normalizeRow(row as unknown as Record<string, unknown>))
 
       setOrders(normalized)
       setIsLoading(false)
     }
 
     void loadOrders()
-  }, [restaurantId, supabase])
+  }, [restaurantId, supabase, orderSelectQuery, normalizeRow])
+
+  // Realtime subscription for live order updates
+  useEffect(() => {
+    if (!restaurantId) return
+
+    const channel = supabase
+      .channel('orders-realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'orders',
+          filter: `restaurant_id=eq.${restaurantId}`,
+        },
+        async (payload) => {
+          const { data } = await supabase
+            .from('orders')
+            .select(orderSelectQuery)
+            .eq('id', payload.new.id)
+            .single()
+
+          if (!data) return
+          const newOrder = normalizeRow(data as unknown as Record<string, unknown>)
+          setOrders((previous) => [newOrder, ...previous])
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'orders',
+          filter: `restaurant_id=eq.${restaurantId}`,
+        },
+        (payload) => {
+          const updatedStatus = normalizeStatus(payload.new.status as string)
+          setOrders((previous) =>
+            previous.map((order) =>
+              order.id === payload.new.id ? { ...order, status: updatedStatus } : order
+            )
+          )
+          setSelectedOrder((previous) => {
+            if (!previous || previous.id !== (payload.new.id as string)) return previous
+            return { ...previous, status: updatedStatus }
+          })
+        }
+      )
+      .subscribe()
+
+    return () => {
+      void supabase.removeChannel(channel)
+    }
+  }, [restaurantId, supabase, orderSelectQuery, normalizeRow])
+
+  // Refresh relative timestamps every 60s so "just now" → "1 min ago" stays accurate
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setOrders((previous) =>
+        previous.map((order) => ({ ...order, time: formatRelativeTime(order.created_at) }))
+      )
+    }, 60_000)
+    return () => clearInterval(interval)
+  }, [])
 
   const filteredOrders = filter === 'all' ? orders : orders.filter((order) => order.status === filter)
   const pageCount = Math.max(1, Math.ceil(filteredOrders.length / PAGE_SIZE))

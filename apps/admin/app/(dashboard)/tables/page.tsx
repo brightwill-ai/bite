@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
+import JSZip from 'jszip'
 import { Plus, Download, X } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
 import { PageHeader } from '@/components/PageHeader'
@@ -43,6 +44,7 @@ export default function TablesPage() {
   const [showAddModal, setShowAddModal] = useState(false)
   const [newTableCount, setNewTableCount] = useState('1')
   const [isGoingLive, setIsGoingLive] = useState(false)
+  const [isDownloadingAll, setIsDownloadingAll] = useState(false)
   const isOnboardingFlow = searchParams.get('onboarding') === '1'
 
   useEffect(() => {
@@ -121,23 +123,62 @@ export default function TablesPage() {
     setNewTableCount('1')
   }
 
+  const svgToPngBlob = (svgElement: Element): Promise<Blob | null> => {
+    return new Promise((resolve) => {
+      const svgData = new XMLSerializer().serializeToString(svgElement)
+      const canvas = document.createElement('canvas')
+      canvas.width = 512
+      canvas.height = 512
+      const context = canvas.getContext('2d')
+      const image = new Image()
+      image.onload = () => {
+        context?.drawImage(image, 0, 0, 512, 512)
+        canvas.toBlob((blob) => resolve(blob), 'image/png')
+      }
+      image.onerror = () => resolve(null)
+      image.src = `data:image/svg+xml;base64,${btoa(svgData)}`
+    })
+  }
+
   const handleDownloadQR = (tableNumber: number) => {
     const svg = document.getElementById(`qr-${tableNumber}`)
     if (!svg) return
-    const svgData = new XMLSerializer().serializeToString(svg)
-    const canvas = document.createElement('canvas')
-    canvas.width = 512
-    canvas.height = 512
-    const context = canvas.getContext('2d')
-    const image = new Image()
-    image.onload = () => {
-      context?.drawImage(image, 0, 0, 512, 512)
+    void svgToPngBlob(svg).then((blob) => {
+      if (!blob) return
+      const url = URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.download = `table-${tableNumber}-qr.png`
-      link.href = canvas.toDataURL('image/png')
+      link.href = url
       link.click()
-    }
-    image.src = `data:image/svg+xml;base64,${btoa(svgData)}`
+      URL.revokeObjectURL(url)
+    })
+  }
+
+  const handleDownloadAllQRs = async () => {
+    if (tables.length === 0) return
+    setIsDownloadingAll(true)
+
+    const zip = new JSZip()
+    await Promise.all(
+      tables.map(async (table) => {
+        const svg = document.getElementById(`qr-${table.number}`)
+        if (!svg) return
+        const blob = await svgToPngBlob(svg)
+        if (blob) {
+          zip.file(`table-${table.number}-qr.png`, blob)
+        }
+      })
+    )
+
+    const zipBlob = await zip.generateAsync({ type: 'blob' })
+    const url = URL.createObjectURL(zipBlob)
+    const link = document.createElement('a')
+    link.download = 'all-qr-codes.zip'
+    link.href = url
+    link.click()
+    URL.revokeObjectURL(url)
+
+    setIsDownloadingAll(false)
   }
 
   const handleGoLive = async () => {
@@ -179,6 +220,18 @@ export default function TablesPage() {
                 className="px-4 py-2 border border-border rounded-full text-sm font-medium text-ink hover:bg-bg transition-colors disabled:opacity-50"
               >
                 {isGoingLive ? 'Going Live...' : 'Go Live'}
+              </button>
+            )}
+            {tables.length > 0 && (
+              <button
+                onClick={() => {
+                  void handleDownloadAllQRs()
+                }}
+                disabled={isDownloadingAll}
+                className="flex items-center gap-2 px-4 py-2 border border-border text-ink rounded-full text-sm font-medium hover:bg-bg transition-colors disabled:opacity-50"
+              >
+                <Download size={14} />
+                {isDownloadingAll ? 'Downloading...' : 'Download All QRs'}
               </button>
             )}
             <button
