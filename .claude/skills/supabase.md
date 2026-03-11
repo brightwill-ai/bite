@@ -145,6 +145,8 @@ Required GitHub secrets:
 - `SUPABASE_ANON_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY`
 - Bootstrap script: `.github/scripts/set-supabase-secrets.sh` (uses `GH_TOKEN`/`GITHUB_TOKEN` or git credential helper; sets whichever `SUPABASE_*` vars are exported)
+- GitHub deploy workflow (`.github/workflows/deploy.yml`) forwards those three secrets into the SSH session (`envs`) before `docker compose build/up`; keep this passthrough in place so compose does not default to blank values.
+- Keep deploy timeouts above 15 minutes (currently `command_timeout: 25m`, job `timeout-minutes: 30`) because remote parallel builds for all apps are long-running.
 
 ## When Changing This Area
 

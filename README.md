@@ -132,6 +132,8 @@ Storage buckets:
 
 - `docker-compose.yml` injects Supabase env vars into all three app containers.
 - `.github/workflows/deploy.yml` validates Docker builds for all three apps, then deploys over SSH on pushes to `main`.
+- Deploy uses a `30` minute job timeout and `25m` SSH command timeout because remote `docker compose build --parallel` can exceed 15 minutes.
+- Deploy forwards `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` into the SSH session before `docker compose build/up`; missing secrets fail fast.
 
 Required GitHub repo secrets:
 

@@ -282,6 +282,9 @@ layout.tsx             — Next.js layouts (required name)
 - **Function invoke auth drift**: In admin upload flow, prefer explicit direct `fetch` to `/functions/v1/parse-menu` with `Authorization` and `apikey` headers plus refresh+retry on `401` to avoid transient client SDK token mismatch.
 
 - **Localhost auth collisions**: Running multiple apps on `localhost` ports can share Supabase SSR auth cookies and churn refresh tokens. Keep app-specific cookie names aligned across browser client, server client, and middleware (admin uses `sb-admin-auth-token`).
+- **Deploy SSH timeouts**: Remote `docker compose build --parallel` for all three Next apps can exceed 15 minutes. Keep workflow `command_timeout` and job timeout aligned (currently `25m` and `30` minutes).
+- **Deploy env passthrough**: SSH deploy must forward `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` into the remote shell before `docker compose build/up`; otherwise compose defaults to blank values.
+- **Next.js 14 config keys**: In this repo's Next.js 14.2.21 apps, keep `outputFileTracingRoot` and admin's PDF external package config under `experimental` (`outputFileTracingRoot`, `serverComponentsExternalPackages`) to avoid invalid `next.config.js` warnings in CI/Docker builds.
 
 ---
 
