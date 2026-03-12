@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import Image from 'next/image'
 import { useRouter } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
 import { ChevronDown, ChevronRight, Plus, Upload, Pencil, X, Loader2, ImageIcon } from 'lucide-react'
@@ -202,7 +203,7 @@ function ItemEditDrawer({
             className="relative w-full h-32 bg-surface border border-border rounded overflow-hidden hover:border-ink transition-colors flex items-center justify-center group"
           >
             {imageUrl ? (
-              <img src={imageUrl} alt={name} className="w-full h-full object-cover" />
+              <Image src={imageUrl} alt={name} fill className="object-cover" unoptimized />
             ) : (
               <div className="flex flex-col items-center gap-2 text-faint group-hover:text-muted transition-colors">
                 <ImageIcon size={24} />

@@ -233,7 +233,7 @@ export function ModifierGroupEditor({
       <div className="space-y-2">
         {groups.length === 0 ? (
           <p className="text-xs text-faint py-2">
-            No modifier groups yet. Add one to let customers customize this item (e.g. "Choose your cheese", "Add-ons").
+            No modifier groups yet. Add one to let customers customize this item (e.g. &quot;Choose your cheese&quot;, &quot;Add-ons&quot;).
           </p>
         ) : (
           groups.map((group) => (
