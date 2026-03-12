@@ -2,6 +2,13 @@ import { create } from 'zustand'
 import { createClient } from '@/lib/supabase/client'
 import type { MenuCategory, MenuItem, ModifierGroup, Modifier } from '@bite/types'
 
+// Temp types used during upload review before items have real DB IDs
+export type TempModifierGroup = Omit<ModifierGroup, 'id'> & { tempId: string }
+export type TempModifier = Omit<Modifier, 'id' | 'group_id'> & {
+  tempId: string
+  groupTempId: string
+}
+
 interface MenuStore {
   restaurantId: string | null
   isLoading: boolean
@@ -18,7 +25,18 @@ interface MenuStore {
   deleteItem: (id: string) => Promise<void>
   toggleAvailability: (id: string) => Promise<void>
   reorderItems: (categoryId: string, orderedIds: string[]) => Promise<void>
-  importParsedMenu: (categories: MenuCategory[], items: MenuItem[]) => Promise<void>
+  importParsedMenu: (
+    categories: MenuCategory[],
+    items: MenuItem[],
+    tempGroups?: TempModifierGroup[],
+    tempModifiers?: TempModifier[]
+  ) => Promise<void>
+  addModifierGroup: (group: Omit<ModifierGroup, 'id'>) => Promise<ModifierGroup | null>
+  updateModifierGroup: (id: string, updates: Partial<ModifierGroup>) => Promise<void>
+  deleteModifierGroup: (id: string) => Promise<void>
+  addModifier: (modifier: Omit<Modifier, 'id'>) => Promise<Modifier | null>
+  updateModifier: (id: string, updates: Partial<Modifier>) => Promise<void>
+  deleteModifier: (id: string) => Promise<void>
 }
 
 function toMenuCategory(row: {
@@ -447,7 +465,161 @@ export const useMenuStore = create<MenuStore>((set, get) => ({
     }))
   },
 
-  importParsedMenu: async (categories, items) => {
+  addModifierGroup: async (group) => {
+    const supabase = createClient()
+    const nextOrder = (get().modifierGroups[group.item_id] ?? []).length + 1
+    const { data, error } = await supabase
+      .from('modifier_groups')
+      .insert({
+        item_id: group.item_id,
+        name: group.name,
+        selection_type: group.selection_type,
+        is_required: group.is_required,
+        min_selections: group.min_selections,
+        max_selections: group.max_selections,
+        display_order: nextOrder,
+      })
+      .select('id, item_id, name, selection_type, is_required, min_selections, max_selections, display_order')
+      .single()
+
+    if (error || !data) {
+      return null
+    }
+
+    const newGroup = toModifierGroup(data)
+    set((state) => ({
+      modifierGroups: {
+        ...state.modifierGroups,
+        [group.item_id]: [...(state.modifierGroups[group.item_id] ?? []), newGroup],
+      },
+    }))
+    return newGroup
+  },
+
+  updateModifierGroup: async (id, updates) => {
+    const supabase = createClient()
+    const { error } = await supabase
+      .from('modifier_groups')
+      .update({
+        name: updates.name,
+        selection_type: updates.selection_type,
+        is_required: updates.is_required,
+        min_selections: updates.min_selections,
+        max_selections: updates.max_selections,
+        display_order: updates.display_order,
+      })
+      .eq('id', id)
+
+    if (error) {
+      return
+    }
+
+    set((state) => {
+      const nextGroups = { ...state.modifierGroups }
+      for (const itemId of Object.keys(nextGroups)) {
+        nextGroups[itemId] = nextGroups[itemId].map((g) =>
+          g.id === id ? { ...g, ...updates } : g
+        )
+      }
+      return { modifierGroups: nextGroups }
+    })
+  },
+
+  deleteModifierGroup: async (id) => {
+    const supabase = createClient()
+    const { error } = await supabase.from('modifier_groups').delete().eq('id', id)
+
+    if (error) {
+      return
+    }
+
+    set((state) => {
+      const nextGroups = { ...state.modifierGroups }
+      const nextModifiers = { ...state.modifiers }
+      delete nextModifiers[id]
+      for (const itemId of Object.keys(nextGroups)) {
+        nextGroups[itemId] = nextGroups[itemId].filter((g) => g.id !== id)
+      }
+      return { modifierGroups: nextGroups, modifiers: nextModifiers }
+    })
+  },
+
+  addModifier: async (modifier) => {
+    const supabase = createClient()
+    const nextOrder = (get().modifiers[modifier.group_id] ?? []).length + 1
+    const { data, error } = await supabase
+      .from('modifiers')
+      .insert({
+        group_id: modifier.group_id,
+        name: modifier.name,
+        price_delta: modifier.price_delta,
+        is_available: modifier.is_available,
+        display_order: nextOrder,
+        emoji: modifier.emoji ?? null,
+      })
+      .select('id, group_id, name, price_delta, is_available, display_order, emoji')
+      .single()
+
+    if (error || !data) {
+      return null
+    }
+
+    const newModifier = toModifier(data)
+    set((state) => ({
+      modifiers: {
+        ...state.modifiers,
+        [modifier.group_id]: [...(state.modifiers[modifier.group_id] ?? []), newModifier],
+      },
+    }))
+    return newModifier
+  },
+
+  updateModifier: async (id, updates) => {
+    const supabase = createClient()
+    const { error } = await supabase
+      .from('modifiers')
+      .update({
+        name: updates.name,
+        price_delta: updates.price_delta,
+        is_available: updates.is_available,
+        display_order: updates.display_order,
+        emoji: updates.emoji ?? null,
+      })
+      .eq('id', id)
+
+    if (error) {
+      return
+    }
+
+    set((state) => {
+      const nextModifiers = { ...state.modifiers }
+      for (const groupId of Object.keys(nextModifiers)) {
+        nextModifiers[groupId] = nextModifiers[groupId].map((m) =>
+          m.id === id ? { ...m, ...updates } : m
+        )
+      }
+      return { modifiers: nextModifiers }
+    })
+  },
+
+  deleteModifier: async (id) => {
+    const supabase = createClient()
+    const { error } = await supabase.from('modifiers').delete().eq('id', id)
+
+    if (error) {
+      return
+    }
+
+    set((state) => {
+      const nextModifiers = { ...state.modifiers }
+      for (const groupId of Object.keys(nextModifiers)) {
+        nextModifiers[groupId] = nextModifiers[groupId].filter((m) => m.id !== id)
+      }
+      return { modifiers: nextModifiers }
+    })
+  },
+
+  importParsedMenu: async (categories, items, tempGroups, tempModifiers) => {
     const supabase = createClient()
     const restaurantId = get().restaurantId
     if (!restaurantId) {
@@ -477,20 +649,63 @@ export const useMenuStore = create<MenuStore>((set, get) => ({
       if (!mappedCategoryId) {
         continue
       }
-      await supabase.from('menu_items').insert({
-        restaurant_id: restaurantId,
-        category_id: mappedCategoryId,
-        name: item.name,
-        description: item.description ?? null,
-        price: item.price,
-        image_url: item.image_url ?? null,
-        emoji: item.emoji ?? null,
-        is_available: item.is_available,
-        is_popular: item.is_popular,
-        is_new: item.is_new ?? false,
-        needs_review: item.needs_review ?? false,
-        display_order: item.display_order,
-      })
+      const { data: newItem } = await supabase
+        .from('menu_items')
+        .insert({
+          restaurant_id: restaurantId,
+          category_id: mappedCategoryId,
+          name: item.name,
+          description: item.description ?? null,
+          price: item.price,
+          image_url: item.image_url ?? null,
+          emoji: item.emoji ?? null,
+          is_available: item.is_available,
+          is_popular: item.is_popular,
+          is_new: item.is_new ?? false,
+          needs_review: item.needs_review ?? false,
+          display_order: item.display_order,
+        })
+        .select('id')
+        .single()
+
+      if (!newItem || !tempGroups || !tempModifiers) {
+        continue
+      }
+
+      // Insert modifier groups that belong to this (temp) item
+      const itemTempGroups = tempGroups.filter((g) => g.item_id === item.id)
+      for (const tg of itemTempGroups) {
+        const { data: newGroup } = await supabase
+          .from('modifier_groups')
+          .insert({
+            item_id: newItem.id,
+            name: tg.name,
+            selection_type: tg.selection_type,
+            is_required: tg.is_required,
+            min_selections: tg.min_selections,
+            max_selections: tg.max_selections,
+            display_order: tg.display_order,
+          })
+          .select('id')
+          .single()
+
+        if (!newGroup) {
+          continue
+        }
+
+        // Insert modifiers for this group
+        const groupMods = tempModifiers.filter((m) => m.groupTempId === tg.tempId)
+        for (const tm of groupMods) {
+          await supabase.from('modifiers').insert({
+            group_id: newGroup.id,
+            name: tm.name,
+            price_delta: tm.price_delta,
+            is_available: tm.is_available,
+            display_order: tm.display_order,
+            emoji: tm.emoji ?? null,
+          })
+        }
+      }
     }
 
     await get().loadMenu(restaurantId)

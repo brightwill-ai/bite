@@ -3,9 +3,11 @@
 import { useCallback, useMemo, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Upload, FileText, Check, Loader2, ChevronRight, Pencil, Trash2 } from 'lucide-react'
+import { Upload, FileText, Check, Loader2, ChevronRight, Pencil, Trash2, X } from 'lucide-react'
 import type { MenuCategory, MenuItem } from '@bite/types'
 import { PageHeader } from '@/components/PageHeader'
+import { ModifierGroupEditor } from '@/components/ModifierGroupEditor'
+import type { TempModifierGroup, TempModifier } from '@/store/menu'
 import { createClient } from '@/lib/supabase/client'
 import { useAuthStore } from '@/store/auth'
 import { useMenuStore } from '@/store/menu'
@@ -227,6 +229,166 @@ function normalizeParsedMenu(
   return { categories, items }
 }
 
+// ─── Item edit panel (slide-in, replaces inline rows) ───────────────────────
+
+interface ItemEditPanelProps {
+  item: MenuItem
+  categories: MenuCategory[]
+  groups: TempModifierGroup[]
+  modifiersByGroup: Record<string, TempModifier[]>
+  onSave: (id: string, updates: Partial<MenuItem>) => void
+  onClose: () => void
+  onAddGroup: (itemId: string) => void
+  onUpdateGroup: (tempId: string, updates: Partial<TempModifierGroup>) => void
+  onDeleteGroup: (tempId: string) => void
+  onAddModifier: (groupTempId: string) => void
+  onUpdateModifier: (tempId: string, updates: Partial<TempModifier>) => void
+  onDeleteModifier: (tempId: string) => void
+}
+
+function ItemEditPanel({
+  item,
+  categories,
+  groups,
+  modifiersByGroup,
+  onSave,
+  onClose,
+  onAddGroup,
+  onUpdateGroup,
+  onDeleteGroup,
+  onAddModifier,
+  onUpdateModifier,
+  onDeleteModifier,
+}: ItemEditPanelProps) {
+  const [name, setName] = useState(item.name)
+  const [emoji, setEmoji] = useState(item.emoji ?? '')
+  const [description, setDescription] = useState(item.description ?? '')
+  const [price, setPrice] = useState(String(item.price))
+  const [categoryId, setCategoryId] = useState(item.category_id)
+
+  const handleSave = () => {
+    onSave(item.id, {
+      name,
+      emoji,
+      description,
+      price: parseFloat(price) || 0,
+      category_id: categoryId,
+    })
+    onClose()
+  }
+
+  return (
+    <motion.div
+      initial={{ x: '100%' }}
+      animate={{ x: 0 }}
+      exit={{ x: '100%' }}
+      transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+      className="fixed top-0 right-0 w-[520px] h-screen bg-surface2 border-l border-border z-50 flex flex-col shadow-xl"
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
+        <div>
+          <h2 className="font-display font-bold text-base text-ink">{item.name}</h2>
+          <p className="text-xs text-muted mt-0.5">Edit before publishing</p>
+        </div>
+        <button
+          onClick={onClose}
+          className="p-1.5 hover:bg-bg rounded-sm transition-colors"
+          aria-label="Close"
+        >
+          <X size={18} className="text-muted" />
+        </button>
+      </div>
+
+      {/* Body */}
+      <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
+        {/* Basic fields */}
+        <div className="grid grid-cols-[64px_1fr] gap-3">
+          <div>
+            <label className="block text-xs font-medium text-muted mb-1">Emoji</label>
+            <input
+              value={emoji}
+              onChange={(e) => setEmoji(e.target.value)}
+              className="w-full px-2 py-2 bg-surface border border-border rounded-sm text-center text-lg focus:outline-none focus:border-ink transition-colors"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-muted mb-1">Name</label>
+            <input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="w-full px-3 py-2 bg-surface border border-border rounded-sm text-sm focus:outline-none focus:border-ink transition-colors"
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-muted mb-1">Description</label>
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={2}
+            placeholder="What's in it?"
+            className="w-full px-3 py-2 bg-surface border border-border rounded-sm text-sm focus:outline-none focus:border-ink resize-none transition-colors"
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-muted mb-1">Price ($)</label>
+            <input
+              type="number"
+              step="0.01"
+              value={price}
+              onChange={(e) => setPrice(e.target.value)}
+              className="w-full px-3 py-2 bg-surface border border-border rounded-sm text-sm focus:outline-none focus:border-ink transition-colors"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-muted mb-1">Category</label>
+            <select
+              value={categoryId}
+              onChange={(e) => setCategoryId(e.target.value)}
+              className="w-full px-3 py-2 bg-surface border border-border rounded-sm text-sm focus:outline-none focus:border-ink transition-colors"
+            >
+              {categories.map((cat) => (
+                <option key={cat.id} value={cat.id}>{cat.name}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {/* Divider */}
+        <div className="border-t border-border" />
+
+        {/* Modifier groups */}
+        <ModifierGroupEditor
+          groups={groups}
+          modifiersByGroup={modifiersByGroup}
+          onAddGroup={() => onAddGroup(item.id)}
+          onUpdateGroup={onUpdateGroup}
+          onDeleteGroup={onDeleteGroup}
+          onAddModifier={onAddModifier}
+          onUpdateModifier={onUpdateModifier}
+          onDeleteModifier={onDeleteModifier}
+        />
+      </div>
+
+      {/* Footer */}
+      <div className="px-5 py-4 border-t border-border shrink-0">
+        <button
+          onClick={handleSave}
+          className="w-full bg-ink text-surface font-medium text-sm py-2.5 rounded-full hover:opacity-90 transition-opacity"
+        >
+          Save Item
+        </button>
+      </div>
+    </motion.div>
+  )
+}
+
+// ─── Main page ───────────────────────────────────────────────────────────────
+
 export default function MenuUploadPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -240,11 +402,86 @@ export default function MenuUploadPage() {
   const [parsingStep, setParsingStep] = useState(0)
   const [parsedCategories, setParsedCategories] = useState<MenuCategory[]>([])
   const [parsedItems, setParsedItems] = useState<MenuItem[]>([])
-  const [editingItemId, setEditingItemId] = useState<string | null>(null)
+  const [editingItem, setEditingItem] = useState<MenuItem | null>(null)
   const [error, setError] = useState('')
   const [publishing, setPublishing] = useState(false)
 
+  // Modifier state — held locally until publish
+  const [tempGroups, setTempGroups] = useState<TempModifierGroup[]>([])
+  const [tempModifiers, setTempModifiers] = useState<TempModifier[]>([])
+
   const reviewCount = parsedItems.filter((item) => item.needs_review).length
+
+  // ── Modifier handlers ──────────────────────────────────────────────────────
+
+  const handleAddGroup = (itemId: string) => {
+    const itemGroupCount = tempGroups.filter((g) => g.item_id === itemId).length
+    const newGroup: TempModifierGroup = {
+      tempId: crypto.randomUUID(),
+      item_id: itemId,
+      name: 'New group',
+      selection_type: 'single',
+      is_required: false,
+      min_selections: 0,
+      max_selections: 1,
+      display_order: itemGroupCount + 1,
+    }
+    setTempGroups((prev) => [...prev, newGroup])
+  }
+
+  const handleUpdateGroup = (tempId: string, updates: Partial<TempModifierGroup>) => {
+    setTempGroups((prev) =>
+      prev.map((g) => (g.tempId === tempId ? { ...g, ...updates } : g))
+    )
+  }
+
+  const handleDeleteGroup = (tempId: string) => {
+    setTempGroups((prev) => prev.filter((g) => g.tempId !== tempId))
+    setTempModifiers((prev) => prev.filter((m) => m.groupTempId !== tempId))
+  }
+
+  const handleAddModifier = (groupTempId: string) => {
+    const groupModCount = tempModifiers.filter((m) => m.groupTempId === groupTempId).length
+    const newMod: TempModifier = {
+      tempId: crypto.randomUUID(),
+      groupTempId,
+      name: 'New option',
+      price_delta: 0,
+      is_available: true,
+      display_order: groupModCount + 1,
+    }
+    setTempModifiers((prev) => [...prev, newMod])
+  }
+
+  const handleUpdateModifier = (tempId: string, updates: Partial<TempModifier>) => {
+    setTempModifiers((prev) =>
+      prev.map((m) => (m.tempId === tempId ? { ...m, ...updates } : m))
+    )
+  }
+
+  const handleDeleteModifier = (tempId: string) => {
+    setTempModifiers((prev) => prev.filter((m) => m.tempId !== tempId))
+  }
+
+  // ── Item field updates ─────────────────────────────────────────────────────
+
+  const updateItem = (id: string, updates: Partial<MenuItem>) => {
+    setParsedItems((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, ...updates } : item))
+    )
+  }
+
+  const removeItem = (id: string) => {
+    setParsedItems((prev) => prev.filter((item) => item.id !== id))
+    // Also clean up any modifier groups for this item
+    const groupTempIds = tempGroups
+      .filter((g) => g.item_id === id)
+      .map((g) => g.tempId)
+    setTempGroups((prev) => prev.filter((g) => g.item_id !== id))
+    setTempModifiers((prev) => prev.filter((m) => !groupTempIds.includes(m.groupTempId)))
+  }
+
+  // ── Parse flow ─────────────────────────────────────────────────────────────
 
   const parseFile = useCallback(
     async (file: File) => {
@@ -372,6 +609,8 @@ export default function MenuUploadPage() {
         const normalized = normalizeParsedMenu(restaurantId, payload)
         setParsedCategories(normalized.categories)
         setParsedItems(normalized.items)
+        setTempGroups([])
+        setTempModifiers([])
         setStep(3)
         setParsingStep(parsingSteps.length)
 
@@ -440,18 +679,20 @@ export default function MenuUploadPage() {
 
     setPublishing(true)
     setError('')
-    await importParsedMenu(parsedCategories, parsedItems)
+    await importParsedMenu(parsedCategories, parsedItems, tempGroups, tempModifiers)
     setPublishing(false)
     router.push(isOnboardingFlow ? '/tables?onboarding=1' : '/menu')
   }
 
-  const removeItem = (id: string) => {
-    setParsedItems((items) => items.filter((item) => item.id !== id))
-  }
+  // Build modifiersByGroup for the panel (filters to current item's groups)
+  const editingItemGroups = editingItem
+    ? tempGroups.filter((g) => g.item_id === editingItem.id)
+    : []
 
-  const updateItemField = (id: string, field: keyof MenuItem, value: string | number) => {
-    setParsedItems((items) =>
-      items.map((item) => (item.id === id ? { ...item, [field]: value } : item))
+  const editingModifiersByGroup: Record<string, TempModifier[]> = {}
+  for (const group of editingItemGroups) {
+    editingModifiersByGroup[group.tempId] = tempModifiers.filter(
+      (m) => m.groupTempId === group.tempId
     )
   }
 
@@ -578,98 +819,142 @@ export default function MenuUploadPage() {
           >
             {reviewCount > 0 && (
               <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-[10px] px-4 py-3 text-sm mb-4">
-                {reviewCount} item{reviewCount > 1 ? 's' : ''} need your review
+                {reviewCount} item{reviewCount > 1 ? 's' : ''} flagged for review — click the pencil to fix them
               </div>
             )}
 
-            <div className="bg-surface2 border border-border rounded-lg p-6">
-              <h3 className="font-display font-bold text-base text-ink mb-4">Parsed Menu</h3>
-              <p className="text-xs text-muted mb-4">{parsedCategories.length} categories, {parsedItems.length} items</p>
-              <div className="space-y-4">
-                {parsedCategories.map((category) => (
-                  <div key={category.id}>
-                    <div className="flex items-center gap-2 mb-2">
-                      <span className="text-sm font-semibold text-ink">{category.name}</span>
-                    </div>
-                    <div className="ml-4 space-y-2">
-                      {parsedItems
-                        .filter((item) => item.category_id === category.id)
-                        .map((item) => (
-                          <div
-                            key={item.id}
-                            className={`flex items-center justify-between bg-surface border rounded-sm px-3 py-2 ${
-                              item.needs_review ? 'border-l-4 border-l-amber-400 border-border' : 'border-border'
-                            }`}
-                          >
-                            {editingItemId === item.id ? (
-                              <div className="flex items-center gap-2 flex-1">
-                                <input
-                                  value={item.name}
-                                  onChange={(event) => updateItemField(item.id, 'name', event.target.value)}
-                                  className="flex-1 px-2 py-1 bg-bg border border-border rounded text-xs focus:outline-none"
-                                />
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  value={item.price}
-                                  onChange={(event) => updateItemField(item.id, 'price', parseFloat(event.target.value) || 0)}
-                                  className="w-20 px-2 py-1 bg-bg border border-border rounded text-xs focus:outline-none"
-                                />
-                                <button
-                                  onClick={() => setEditingItemId(null)}
-                                  className="text-xs text-success font-medium"
-                                >
-                                  Done
-                                </button>
-                              </div>
-                            ) : (
-                              <>
-                                <div className="flex items-center gap-2">
-                                  <span className="text-sm">{item.emoji}</span>
-                                  <span className="text-sm text-ink">{item.name}</span>
-                                  {item.needs_review && (
-                                    <span className="text-amber-500 text-xs">&#9888;</span>
-                                  )}
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <span className="font-display text-xs font-bold text-muted">
-                                    ${item.price.toFixed(2)}
-                                  </span>
-                                  <button
-                                    onClick={() => setEditingItemId(item.id)}
-                                    className="p-1 hover:bg-bg rounded transition-colors"
-                                    aria-label="Edit"
-                                  >
-                                    <Pencil size={12} className="text-muted" />
-                                  </button>
-                                  <button
-                                    onClick={() => removeItem(item.id)}
-                                    className="p-1 hover:bg-bg rounded transition-colors"
-                                    aria-label="Remove"
-                                  >
-                                    <Trash2 size={12} className="text-error" />
-                                  </button>
-                                </div>
-                              </>
-                            )}
-                          </div>
-                        ))}
-                    </div>
-                  </div>
-                ))}
+            <div className="bg-surface2 border border-border rounded-lg overflow-hidden">
+              {/* Header row */}
+              <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+                <div>
+                  <h3 className="font-display font-bold text-base text-ink">Parsed Menu</h3>
+                  <p className="text-xs text-muted mt-0.5">
+                    {parsedCategories.length} {parsedCategories.length === 1 ? 'category' : 'categories'} ·{' '}
+                    {parsedItems.length} {parsedItems.length === 1 ? 'item' : 'items'} ·{' '}
+                    Click <Pencil size={10} className="inline" /> to edit details and add modifiers
+                  </p>
+                </div>
               </div>
 
-              <button
-                onClick={() => {
-                  void handlePublish()
-                }}
-                disabled={publishing}
-                className="w-full mt-6 bg-ink text-surface font-medium text-sm py-2.5 rounded-full hover:opacity-90 transition-opacity disabled:opacity-60"
-              >
-                {publishing ? 'Publishing...' : 'Publish Menu'}
-              </button>
+              {/* Item list */}
+              <div className="divide-y divide-border">
+                {parsedCategories.map((category) => {
+                  const catItems = parsedItems.filter((item) => item.category_id === category.id)
+                  if (catItems.length === 0) return null
+                  return (
+                    <div key={category.id}>
+                      {/* Category header */}
+                      <div className="px-5 py-2 bg-surface">
+                        <span className="text-xs font-semibold text-muted uppercase tracking-wide">
+                          {category.name}
+                        </span>
+                      </div>
+
+                      {/* Items */}
+                      {catItems.map((item) => {
+                        const itemGroupCount = tempGroups.filter((g) => g.item_id === item.id).length
+                        return (
+                          <div
+                            key={item.id}
+                            className={`flex items-center gap-3 px-5 py-3 hover:bg-bg/40 transition-colors ${
+                              item.needs_review ? 'border-l-4 border-l-amber-400' : ''
+                            }`}
+                          >
+                            {/* Emoji */}
+                            <span className="text-base shrink-0 w-6 text-center">{item.emoji}</span>
+
+                            {/* Name + description */}
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-medium text-ink truncate">{item.name}</span>
+                                {item.needs_review && (
+                                  <span className="text-[10px] font-semibold text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full shrink-0">
+                                    REVIEW
+                                  </span>
+                                )}
+                                {itemGroupCount > 0 && (
+                                  <span className="text-[10px] text-muted shrink-0">
+                                    {itemGroupCount} modifier{itemGroupCount !== 1 ? 's' : ''}
+                                  </span>
+                                )}
+                              </div>
+                              {item.description && (
+                                <p className="text-xs text-muted truncate max-w-md mt-0.5">{item.description}</p>
+                              )}
+                            </div>
+
+                            {/* Price */}
+                            <span className="font-display text-sm font-bold text-ink shrink-0">
+                              ${item.price.toFixed(2)}
+                            </span>
+
+                            {/* Actions */}
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                onClick={() => setEditingItem(item)}
+                                className="p-1.5 hover:bg-surface rounded-sm transition-colors"
+                                aria-label="Edit item"
+                              >
+                                <Pencil size={13} className="text-muted" />
+                              </button>
+                              <button
+                                onClick={() => removeItem(item.id)}
+                                className="p-1.5 hover:bg-surface rounded-sm transition-colors"
+                                aria-label="Remove item"
+                              >
+                                <Trash2 size={13} className="text-error/60 hover:text-error" />
+                              </button>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )
+                })}
+              </div>
+
+              {/* Publish footer */}
+              <div className="px-5 py-4 border-t border-border bg-surface">
+                <button
+                  onClick={() => { void handlePublish() }}
+                  disabled={publishing}
+                  className="w-full bg-ink text-surface font-medium text-sm py-2.5 rounded-full hover:opacity-90 transition-opacity disabled:opacity-60 flex items-center justify-center gap-2"
+                >
+                  {publishing && <Loader2 size={14} className="animate-spin" />}
+                  {publishing ? 'Publishing...' : 'Publish Menu'}
+                </button>
+              </div>
             </div>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Slide-in item edit panel */}
+      <AnimatePresence>
+        {editingItem && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 0.3 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setEditingItem(null)}
+              className="fixed inset-0 bg-ink z-40"
+            />
+            <ItemEditPanel
+              item={editingItem}
+              categories={parsedCategories}
+              groups={editingItemGroups}
+              modifiersByGroup={editingModifiersByGroup}
+              onSave={updateItem}
+              onClose={() => setEditingItem(null)}
+              onAddGroup={handleAddGroup}
+              onUpdateGroup={handleUpdateGroup}
+              onDeleteGroup={handleDeleteGroup}
+              onAddModifier={handleAddModifier}
+              onUpdateModifier={handleUpdateModifier}
+              onDeleteModifier={handleDeleteModifier}
+            />
+          </>
         )}
       </AnimatePresence>
     </div>
